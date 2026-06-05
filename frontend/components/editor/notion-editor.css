@@ -1,0 +1,118 @@
+/* Notion-like editor styles */
+.notion-editor {
+  min-height: 100%;
+}
+
+.notion-editor .tiptap {
+  outline: none;
+  padding: 1.5rem 2rem;
+  min-height: 100%;
+  font-size: 0.9375rem;
+  line-height: 1.75;
+  color: #1a1a1a;
+}
+
+/* Placeholder */
+.notion-editor .tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  color: #aaa;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}
+
+/* Headings */
+.notion-editor .tiptap h1 { font-size: 1.75rem; font-weight: 700; margin: 1.2em 0 0.3em; line-height: 1.3; }
+.notion-editor .tiptap h2 { font-size: 1.35rem; font-weight: 600; margin: 1.1em 0 0.3em; }
+.notion-editor .tiptap h3 { font-size: 1.1rem;  font-weight: 600; margin: 1em 0 0.3em; }
+
+/* Paragraphs */
+.notion-editor .tiptap p { margin: 0.3em 0; }
+
+/* Bold / italic */
+.notion-editor .tiptap strong { font-weight: 600; }
+
+/* Code inline */
+.notion-editor .tiptap code {
+  background: #f0f0f0;
+  border-radius: 3px;
+  padding: 0.1em 0.3em;
+  font-size: 0.875em;
+  font-family: "SF Mono", "Fira Code", monospace;
+}
+
+/* Code block */
+.notion-editor .tiptap pre {
+  background: #1e1e1e;
+  color: #d4d4d4;
+  border-radius: 8px;
+  padding: 1em 1.2em;
+  margin: 0.8em 0;
+  overflow-x: auto;
+}
+.notion-editor .tiptap pre code {
+  background: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.85em;
+}
+
+/* Blockquote */
+.notion-editor .tiptap blockquote {
+  border-left: 3px solid #ddd;
+  padding-left: 1em;
+  margin: 0.5em 0;
+  color: #666;
+}
+
+/* Lists */
+.notion-editor .tiptap ul { list-style: disc; padding-left: 1.4em; margin: 0.3em 0; }
+.notion-editor .tiptap ol { list-style: decimal; padding-left: 1.4em; margin: 0.3em 0; }
+.notion-editor .tiptap li { margin: 0.15em 0; }
+
+/* Horizontal rule */
+.notion-editor .tiptap hr { border: none; border-top: 1px solid #e5e5e5; margin: 1.5em 0; }
+
+/* Selection */
+.notion-editor .tiptap ::selection { background: #b5d4f5; }
+
+/* Wiki links are stored as [[paper_id]] markdown but rendered as one chip. */
+.notion-editor .tiptap .wiki-link-decoration {
+  cursor: pointer;
+  font-size: 0;
+  white-space: nowrap;
+}
+
+.notion-editor .tiptap .wiki-link-decoration::after {
+  content: "@" attr(data-wiki-label);
+  display: inline-flex;
+  align-items: center;
+  max-width: 20rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: baseline;
+  border-radius: 5px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+  padding: 0.05rem 0.35rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+/* Images */
+.notion-editor .tiptap img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  margin: 0.5em 0;
+  display: block;
+  cursor: default;
+}
+.notion-editor .tiptap img.ProseMirror-selectednode {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+/* Focus outline on the editor boundary */
+.notion-editor .tiptap:focus { outline: none; }

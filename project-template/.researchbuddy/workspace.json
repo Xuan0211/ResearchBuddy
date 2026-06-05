@@ -1,0 +1,46 @@
+{
+  "schema": "researchbuddy.workspace",
+  "version": "0.1",
+  "source_of_truth": "git-workspace",
+  "agent_contract": {
+    "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills"],
+    "system_owned": [".researchbuddy"],
+    "content_format": "markdown-with-yaml-frontmatter",
+    "citation_syntax": "[[paper_id]]"
+  },
+  "folders": {
+    "papers": "Paper notes and bibliographic metadata",
+    "docs": "Long-form notes, drafts, and shared project documents",
+    "meetings": "Meeting notes and agenda records",
+    "prototypes": "Prototype code, experiments, and design explorations",
+    "writing": "Paper-writing workspace, including LaTeX projects",
+    "assets": "Images, PDFs, datasets, and other binary assets",
+    "team": "Shared contacts, roles, and collaboration metadata",
+    "skills": "Reusable agent/team playbooks and local skills"
+  },
+  "extensions": {
+    "paper_writing": {
+      "root": "writing",
+      "preferred": ["latex", "markdown"]
+    },
+    "prototype_development": {
+      "root": "prototypes",
+      "preferred": ["web", "notebooks", "scripts"]
+    },
+    "team_skills": {
+      "root": "skills",
+      "preferred": ["markdown", "codex-skill"]
+    }
+  },
+  "sync": {
+    "zotero": {
+      "state": ".researchbuddy/zotero-map.json"
+    },
+    "google_drive": {
+      "state": ".researchbuddy/drive-map.json"
+    },
+    "index": {
+      "state": ".researchbuddy/index.json"
+    }
+  }
+}

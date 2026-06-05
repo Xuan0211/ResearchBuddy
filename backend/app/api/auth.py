@@ -1,0 +1,167 @@
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, EmailStr
+from sqlmodel import Session, select
+
+from ..core.db import get_session
+from ..core.security import (
+    create_access_token,
+    generate_api_key,
+    get_current_user,
+    hash_password,
+    verify_password,
+)
+from ..models import APIKey, User
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+class RegisterIn(BaseModel):
+    email: EmailStr
+    password: str
+    name: str
+
+
+class LoginIn(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class APIKeyIn(BaseModel):
+    name: str
+
+
+@router.post("/register", status_code=201)
+def register(body: RegisterIn, session: Session = Depends(get_session)):
+    if session.exec(select(User).where(User.email == body.email)).first():
+        raise HTTPException(400, "Email already registered")
+    user = User(email=body.email, hashed_password=hash_password(body.password), name=body.name)
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"access_token": create_access_token(str(user.id)), "token_type": "bearer"}
+
+
+@router.post("/login")
+def login(body: LoginIn, session: Session = Depends(get_session)):
+    user = session.exec(select(User).where(User.email == body.email)).first()
+    if not user or not verify_password(body.password, user.hashed_password):
+        raise HTTPException(401, "Invalid credentials")
+    return {"access_token": create_access_token(str(user.id)), "token_type": "bearer"}
+
+
+@router.get("/me")
+def me(current_user: User = Depends(get_current_user)):
+    return {"id": str(current_user.id), "email": current_user.email, "name": current_user.name}
+
+
+@router.post("/api-keys", status_code=201)
+def create_api_key(
+    body: APIKeyIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    raw, hashed = generate_api_key()
+    key = APIKey(user_id=current_user.id, key_hash=hashed, name=body.name)
+    session.add(key)
+    session.commit()
+    session.refresh(key)
+    return {"id": str(key.id), "name": key.name, "key": raw}  # raw shown once only
+
+
+@router.get("/api-keys")
+def list_api_keys(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    keys = session.exec(select(APIKey).where(APIKey.user_id == current_user.id)).all()
+    return [{"id": str(k.id), "name": k.name, "last_used": k.last_used} for k in keys]
+
+
+@router.delete("/api-keys/{key_id}", status_code=204)
+def delete_api_key(
+    key_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    key = session.exec(
+        select(APIKey).where(APIKey.id == key_id, APIKey.user_id == current_user.id)
+    ).first()
+    if not key:
+        raise HTTPException(404, "API key not found")
+    session.delete(key)
+    session.commit()
+
+
+# ── Google Drive OAuth ──────────────────────────────────────────────────────
+
+import hashlib, hmac, time
+from fastapi.responses import RedirectResponse
+from ..services import google_drive as gd
+from ..core.config import settings
+
+
+def _make_state(user_id: str) -> str:
+    """Sign user_id + timestamp so the callback can verify it."""
+    ts = str(int(time.time()))
+    payload = f"{user_id}:{ts}"
+    sig = hmac.new(settings.secret_key.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{payload}:{sig}"
+
+
+def _verify_state(state: str) -> str | None:
+    """Return user_id if valid and not expired (5 min window)."""
+    try:
+        user_id, ts, sig = state.rsplit(":", 2)
+        if int(time.time()) - int(ts) > 300:
+            return None
+        expected = hmac.new(settings.secret_key.encode(), f"{user_id}:{ts}".encode(), hashlib.sha256).hexdigest()[:16]
+        if not hmac.compare_digest(sig, expected):
+            return None
+        return user_id
+    except Exception:
+        return None
+
+
+@router.get("/google-drive/authorize")
+def google_drive_authorize(current_user: User = Depends(get_current_user)):
+    """Return the Google OAuth URL for the current user."""
+    state = _make_state(str(current_user.id))
+    url = gd.get_auth_url(state)
+    return {"url": url}
+
+
+@router.get("/google-drive/callback")
+def google_drive_callback(
+    code: str,
+    state: str,
+    session: Session = Depends(get_session),
+):
+    """Google redirects here after user grants access."""
+    user_id = _verify_state(state)
+    if not user_id:
+        raise HTTPException(400, "Invalid or expired OAuth state")
+    token = gd.exchange_code(code)
+    gd.save_token(user_id, token, session)
+    return RedirectResponse(f"{settings.frontend_url}/settings?drive=connected")
+
+
+@router.get("/google-drive/status")
+def google_drive_status(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    token = gd.load_token(str(current_user.id), session)
+    return {"connected": token is not None}
+
+
+@router.delete("/google-drive/disconnect", status_code=204)
+def google_drive_disconnect(
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    from ..models import GoogleDriveToken
+    from sqlmodel import select as sel
+    row = session.exec(sel(GoogleDriveToken).where(GoogleDriveToken.user_id == current_user.id)).first()
+    if row:
+        session.delete(row)
+        session.commit()

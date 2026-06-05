@@ -1,0 +1,632 @@
+"""Google Drive OAuth2 and file operations."""
+import base64
+import html
+import json
+import re
+from datetime import datetime, timezone
+from urllib.parse import parse_qs, urlencode, urlparse
+
+import requests as _requests
+from cryptography.fernet import Fernet
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaInMemoryUpload
+from sqlmodel import Session, select
+
+from ..core.config import settings
+from ..models import GoogleDriveToken
+from .project_fs import project_worktree, read_project_file
+
+SCOPES = [
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/documents",
+]
+DRIVE_SETTINGS_PATH = ".researchbuddy/drive-settings.json"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+def _fernet() -> Fernet:
+    raw = settings.secret_key.encode()[:32].ljust(32, b"=")
+    return Fernet(base64.urlsafe_b64encode(raw))
+
+
+def get_auth_url(state: str) -> str:
+    """Build auth URL manually — no PKCE, no library surprises."""
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.google_redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    }
+    return f"{_AUTH_URI}?{urlencode(params)}"
+
+
+def exchange_code(code: str) -> dict:
+    """Exchange auth code for tokens via direct POST (no PKCE)."""
+    resp = _requests.post(
+        _TOKEN_URI,
+        data={
+            "code": code,
+            "client_id": settings.google_client_id,
+            "client_secret": settings.google_client_secret,
+            "redirect_uri": settings.google_redirect_uri,
+            "grant_type": "authorization_code",
+        },
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return {
+        "token": data["access_token"],
+        "refresh_token": data.get("refresh_token"),
+        "token_uri": _TOKEN_URI,
+        "client_id": settings.google_client_id,
+        "client_secret": settings.google_client_secret,
+        "scopes": SCOPES,
+    }
+
+
+def _creds_to_dict(creds: Credentials) -> dict:
+    return {
+        "token": creds.token,
+        "refresh_token": creds.refresh_token,
+        "token_uri": creds.token_uri,
+        "client_id": creds.client_id,
+        "client_secret": creds.client_secret,
+        "scopes": list(creds.scopes) if creds.scopes else SCOPES,
+    }
+
+
+def _ensure_required_scopes(token_dict: dict) -> None:
+    granted = set(token_dict.get("scopes") or [])
+    missing = [scope for scope in SCOPES if scope not in granted]
+    if missing:
+        raise ValueError("Google Drive permissions changed; reconnect Drive in Settings.")
+
+
+def save_token(user_id: str, token_dict: dict, session: Session) -> None:
+    encrypted = _fernet().encrypt(json.dumps(token_dict).encode()).decode()
+    existing = session.exec(
+        select(GoogleDriveToken).where(GoogleDriveToken.user_id == user_id)
+    ).first()
+    if existing:
+        existing.token_encrypted = encrypted
+        existing.updated_at = datetime.now(timezone.utc)
+        session.add(existing)
+    else:
+        from uuid import UUID
+        session.add(GoogleDriveToken(user_id=UUID(user_id), token_encrypted=encrypted))
+    session.commit()
+
+
+def load_token(user_id: str, session: Session) -> dict | None:
+    row = session.exec(
+        select(GoogleDriveToken).where(GoogleDriveToken.user_id == user_id)
+    ).first()
+    if not row:
+        return None
+    return json.loads(_fernet().decrypt(row.token_encrypted.encode()))
+
+
+def get_service(token_dict: dict, user_id: str, session: Session):
+    """Build an authenticated Drive service, refreshing token if needed."""
+    _ensure_required_scopes(token_dict)
+    creds = Credentials(
+        token=token_dict.get("token"),
+        refresh_token=token_dict.get("refresh_token"),
+        token_uri=token_dict.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=token_dict.get("client_id", settings.google_client_id),
+        client_secret=token_dict.get("client_secret", settings.google_client_secret),
+        scopes=token_dict.get("scopes", SCOPES),
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        save_token(user_id, _creds_to_dict(creds), session)
+
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def get_docs_service(token_dict: dict, user_id: str, session: Session):
+    _ensure_required_scopes(token_dict)
+    creds = Credentials(
+        token=token_dict.get("token"),
+        refresh_token=token_dict.get("refresh_token"),
+        token_uri=token_dict.get("token_uri", "https://oauth2.googleapis.com/token"),
+        client_id=token_dict.get("client_id", settings.google_client_id),
+        client_secret=token_dict.get("client_secret", settings.google_client_secret),
+        scopes=token_dict.get("scopes", SCOPES),
+    )
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        save_token(user_id, _creds_to_dict(creds), session)
+    return build("docs", "v1", credentials=creds, cache_discovery=False)
+
+
+def _drive_query_value(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def get_or_create_folder(service, name: str, parent_id: str | None = None) -> str:
+    q = f"name='{_drive_query_value(name)}' and mimeType='{FOLDER_MIME}' and trashed=false"
+    if parent_id:
+        q += f" and '{parent_id}' in parents"
+    results = service.files().list(q=q, fields="files(id)", spaces="drive").execute()
+    files = results.get("files", [])
+    if files:
+        return files[0]["id"]
+    meta: dict = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+    if parent_id:
+        meta["parents"] = [parent_id]
+    folder = service.files().create(body=meta, fields="id").execute()
+    return folder["id"]
+
+
+def create_folder(service, name: str, parent_id: str | None = None) -> dict:
+    meta: dict = {"name": name, "mimeType": FOLDER_MIME}
+    if parent_id:
+        meta["parents"] = [parent_id]
+    return service.files().create(body=meta, fields="id,name,webViewLink").execute()
+
+
+def get_file(service, file_id: str) -> dict:
+    return service.files().get(fileId=file_id, fields="id,name,mimeType,webViewLink").execute()
+
+
+def get_file_modified_time(service, file_id: str) -> datetime | None:
+    """Return the Drive file's modifiedTime as a UTC-aware datetime, or None on error."""
+    try:
+        result = service.files().get(fileId=file_id, fields="modifiedTime").execute()
+        ts = result.get("modifiedTime")
+        if ts:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except Exception:
+        pass
+    return None
+
+
+def load_project_drive_settings(project_id: str) -> dict:
+    try:
+        return json.loads(read_project_file(project_id, DRIVE_SETTINGS_PATH))
+    except Exception:
+        return {}
+
+
+def save_project_drive_settings(project_id: str, payload: dict) -> dict:
+    data = {
+        "schema": "researchbuddy.drive-settings",
+        "version": "0.1",
+        **payload,
+    }
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Update Drive sync settings"
+        path = wt / DRIVE_SETTINGS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return data
+
+
+def _folder_payload(folder: dict, source: str) -> dict:
+    return {
+        "root_folder_id": folder.get("id", ""),
+        "root_folder_name": folder.get("name", ""),
+        "root_folder_link": folder.get("webViewLink", ""),
+        "source": source,
+    }
+
+
+def validate_folder(service, folder_id: str) -> dict:
+    folder = get_file(service, folder_id)
+    if folder.get("mimeType") != FOLDER_MIME:
+        raise ValueError("Selected Drive item is not a folder")
+    return folder
+
+
+def set_project_drive_root_existing(service, project_id: str, folder_id: str) -> dict:
+    folder = validate_folder(service, folder_id)
+    return save_project_drive_settings(project_id, _folder_payload(folder, "existing"))
+
+
+def create_project_drive_root(service, project_id: str, folder_name: str, parent_id: str | None = None) -> dict:
+    folder = create_folder(service, folder_name, parent_id)
+    return save_project_drive_settings(project_id, _folder_payload(folder, "created"))
+
+
+def ensure_project_drive_root(service, project_id: str, project_name: str) -> dict:
+    saved = load_project_drive_settings(project_id)
+    root_id = saved.get("root_folder_id")
+    if root_id:
+        folder = validate_folder(service, root_id)
+        return {**saved, **_folder_payload(folder, saved.get("source", "existing"))}
+
+    rb_folder = get_or_create_folder(service, "ResearchBuddy")
+    project_folder_id = get_or_create_folder(service, project_name, rb_folder)
+    folder = get_file(service, project_folder_id)
+    return save_project_drive_settings(project_id, _folder_payload(folder, "default"))
+
+
+def ensure_project_drive_child_folder(
+    service,
+    project_id: str,
+    project_name: str,
+    child_name: str,
+) -> str:
+    root = ensure_project_drive_root(service, project_id, project_name)
+    return get_or_create_folder(service, child_name, root["root_folder_id"])
+
+
+def upsert_file(
+    service,
+    content: str,
+    filename: str,
+    folder_id: str,
+    existing_file_id: str | None = None,
+) -> dict:
+    """Create or update a markdown file in Drive. Returns {id, webViewLink}."""
+    media = MediaInMemoryUpload(
+        content.encode("utf-8"),
+        mimetype="text/plain",
+        resumable=False,
+    )
+    if existing_file_id:
+        file = service.files().update(
+            fileId=existing_file_id,
+            media_body=media,
+            fields="id,webViewLink",
+        ).execute()
+    else:
+        meta = {"name": filename, "parents": [folder_id]}
+        file = service.files().create(
+            body=meta,
+            media_body=media,
+            fields="id,webViewLink",
+        ).execute()
+    return file
+
+
+def extract_file_id(value: str) -> str:
+    """Accept a Drive/Docs URL or raw file id."""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if "/" not in value and "?" not in value:
+        return value
+    parsed = urlparse(value)
+    patterns = [
+        r"/document/d/([^/]+)",
+        r"/file/d/([^/]+)",
+        r"/folders/([^/?]+)",
+        r"/spreadsheets/d/([^/]+)",
+        r"/presentation/d/([^/]+)",
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, parsed.path)
+        if m:
+            return m.group(1)
+    return parse_qs(parsed.query).get("id", [""])[0]
+
+
+SYNC_FOOTER = "\n\n---\n_Synced by ResearchBuddy_"
+_SYNC_FOOTER_STRIP = "---\n_Synced by ResearchBuddy_"
+_IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+
+
+def strip_sync_footer(text: str) -> str:
+    """Remove the ResearchBuddy sync footer if present at the end."""
+    stripped = text.rstrip()
+    if stripped.endswith("_Synced by ResearchBuddy_"):
+        stripped = stripped[: -len("_Synced by ResearchBuddy_")].rstrip()
+        if stripped.endswith("---"):
+            stripped = stripped[:-3].rstrip()
+    return stripped
+
+
+def markdown_to_google_doc_html(title: str, markdown: str) -> str:
+    """Small, predictable Markdown-to-HTML converter for Google Docs import."""
+    body_lines = []
+    in_ul = False
+    for raw in markdown.splitlines():
+        line = raw.rstrip()
+        if not line:
+            if in_ul:
+                body_lines.append("</ul>")
+                in_ul = False
+            continue
+        # Image
+        img = _IMG_MD_RE.fullmatch(line.strip())
+        if img:
+            if in_ul:
+                body_lines.append("</ul>")
+                in_ul = False
+            alt = html.escape(img.group(1))
+            src = img.group(2)
+            body_lines.append(f"<p><img src='{html.escape(src)}' alt='{alt}' style='max-width:100%;height:auto'></p>")
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            if in_ul:
+                body_lines.append("</ul>")
+                in_ul = False
+            level = min(len(heading.group(1)), 6)
+            body_lines.append(f"<h{level}>{html.escape(heading.group(2))}</h{level}>")
+            continue
+        bullet = re.match(r"^[-*]\s+(.+)$", line)
+        if bullet:
+            if not in_ul:
+                body_lines.append("<ul>")
+                in_ul = True
+            body_lines.append(f"<li>{html.escape(bullet.group(1))}</li>")
+            continue
+        if in_ul:
+            body_lines.append("</ul>")
+            in_ul = False
+        # Inline images within a paragraph line
+        if _IMG_MD_RE.search(line):
+            parts = _IMG_MD_RE.split(line)
+            out = ""
+            for i, part in enumerate(parts):
+                if i % 3 == 0:
+                    out += html.escape(part)
+                elif i % 3 == 1:
+                    pass  # alt text — consumed below
+                else:
+                    alt = html.escape(parts[i - 1])
+                    out += f"<img src='{html.escape(part)}' alt='{alt}' style='max-height:200px;vertical-align:middle'>"
+            body_lines.append(f"<p>{out}</p>")
+            continue
+        escaped = html.escape(line)
+        escaped = re.sub(r"\[\[([^\]]+)\]\]", r"<code>[[\1]]</code>", escaped)
+        escaped = re.sub(r"(?<![\w@])@([a-zA-Z0-9_.-]+)", r"<strong>@\1</strong>", escaped)
+        body_lines.append(f"<p>{escaped}</p>")
+    if in_ul:
+        body_lines.append("</ul>")
+
+    footer = "<hr><p><em>Synced by ResearchBuddy</em></p>"
+    return (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        f"<title>{html.escape(title)}</title></head><body>"
+        f"{''.join(body_lines)}{footer}</body></html>"
+    )
+
+
+def upsert_google_doc(
+    service,
+    title: str,
+    markdown: str,
+    folder_id: str,
+    existing_file_id: str | None = None,
+) -> dict:
+    """Create or replace content in a Google Docs document using HTML import."""
+    media = MediaInMemoryUpload(
+        markdown_to_google_doc_html(title, markdown).encode("utf-8"),
+        mimetype="text/html",
+        resumable=False,
+    )
+    if existing_file_id:
+        return service.files().update(
+            fileId=existing_file_id,
+            body={"name": title, "mimeType": "application/vnd.google-apps.document"},
+            media_body=media,
+            fields="id,webViewLink,mimeType,name",
+        ).execute()
+    return service.files().create(
+        body={
+            "name": title,
+            "parents": [folder_id],
+            "mimeType": "application/vnd.google-apps.document",
+        },
+        media_body=media,
+        fields="id,webViewLink,mimeType,name",
+    ).execute()
+
+
+def _flatten_doc_tabs(tabs: list[dict]) -> list[dict]:
+    result: list[dict] = []
+    for tab in tabs or []:
+        result.append(tab)
+        result.extend(_flatten_doc_tabs(tab.get("childTabs", []) or []))
+    return result
+
+
+def _tab_id(tab: dict) -> str:
+    return tab.get("tabProperties", {}).get("tabId", "")
+
+
+def _tab_end_index(tab: dict) -> int:
+    body = tab.get("documentTab", {}).get("body", {})
+    content = body.get("content", []) or []
+    if not content:
+        return 1
+    return int(content[-1].get("endIndex") or 1)
+
+
+def _plain_tab_text(markdown: str, add_footer: bool = False) -> str:
+    text = strip_sync_footer((markdown or "").strip())
+    # Replace markdown images with a short placeholder — insertText can't embed images
+    text = _IMG_MD_RE.sub(lambda m: f"[📷 {m.group(1) or 'image'}]", text)
+    if add_footer:
+        return f"{text}{SYNC_FOOTER}\n" if text else f"{SYNC_FOOTER}\n"
+    return f"{text}\n" if text else "\n"
+
+
+def upsert_google_doc_tabs(
+    drive_service,
+    docs_service,
+    title: str,
+    tabs: list[dict],
+    folder_id: str,
+    existing_file_id: str | None = None,
+) -> dict:
+    """Create/update a Google Doc whose content is split across document tabs."""
+    from .document_tabs import normalize_tabs
+
+    normalized = normalize_tabs(tabs, "Main")
+    if existing_file_id:
+        document_id = existing_file_id
+        drive_service.files().update(
+            fileId=document_id,
+            body={"name": title},
+            fields="id",
+        ).execute()
+    else:
+        created = docs_service.documents().create(body={"title": title}).execute()
+        document_id = created["documentId"]
+        drive_service.files().update(
+            fileId=document_id,
+            addParents=folder_id,
+            fields="id",
+        ).execute()
+
+    doc = docs_service.documents().get(
+        documentId=document_id,
+        includeTabsContent=True,
+    ).execute()
+    existing_tabs = _flatten_doc_tabs(doc.get("tabs") or [])
+    if not existing_tabs:
+        raise ValueError("Google Doc has no editable tabs")
+
+    setup_requests: list[dict] = []
+    first_id = _tab_id(existing_tabs[0])
+    setup_requests.append({
+        "updateDocumentTabProperties": {
+            "tabProperties": {
+                "tabId": first_id,
+                "title": normalized[0]["title"],
+                "index": 0,
+            },
+            "fields": "title,index",
+        }
+    })
+    for idx, tab in enumerate(normalized[1:], start=1):
+        if idx < len(existing_tabs):
+            setup_requests.append({
+                "updateDocumentTabProperties": {
+                    "tabProperties": {
+                        "tabId": _tab_id(existing_tabs[idx]),
+                        "title": tab["title"],
+                        "index": idx,
+                    },
+                    "fields": "title,index",
+                }
+            })
+        else:
+            setup_requests.append({
+                "addDocumentTab": {
+                    "tabProperties": {
+                        "title": tab["title"],
+                        "index": idx,
+                    }
+                }
+            })
+    if setup_requests:
+        docs_service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": setup_requests},
+        ).execute()
+
+    doc = docs_service.documents().get(
+        documentId=document_id,
+        includeTabsContent=True,
+    ).execute()
+    target_tabs = _flatten_doc_tabs(doc.get("tabs") or [])[:len(normalized)]
+
+    content_requests: list[dict] = []
+    last_idx = len(normalized) - 1
+    for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
+        tab_id = _tab_id(tab)
+        end_index = _tab_end_index(tab)
+        if end_index > 2:
+            content_requests.append({
+                "deleteContentRange": {
+                    "range": {
+                        "startIndex": 1,
+                        "endIndex": end_index - 1,
+                        "tabId": tab_id,
+                    }
+                }
+            })
+        content_requests.append({
+            "insertText": {
+                "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
+                "endOfSegmentLocation": {"tabId": tab_id},
+            }
+        })
+    if content_requests:
+        docs_service.documents().batchUpdate(
+            documentId=document_id,
+            body={"requests": content_requests},
+        ).execute()
+
+    file = drive_service.files().get(
+        fileId=document_id,
+        fields="id,webViewLink,mimeType,name",
+    ).execute()
+    return file
+
+
+def export_google_doc_text(service, file_id: str) -> str:
+    data = service.files().export(
+        fileId=file_id,
+        mimeType="text/plain",
+    ).execute()
+    if isinstance(data, bytes):
+        return data.decode("utf-8")
+    return str(data)
+
+
+def _structural_elements_to_text(elements: list[dict]) -> str:
+    chunks: list[str] = []
+    for element in elements or []:
+        paragraph = element.get("paragraph")
+        if not paragraph:
+            continue
+        text = ""
+        for run in paragraph.get("elements", []):
+            text += run.get("textRun", {}).get("content", "")
+        text = text.rstrip("\n")
+        if text:
+            chunks.append(text)
+    return "\n\n".join(chunks).strip()
+
+
+def export_google_doc_tabs_markdown(docs_service, file_id: str) -> tuple[str, list[str]]:
+    from .document_tabs import serialize_tabs
+
+    doc = docs_service.documents().get(
+        documentId=file_id,
+        includeTabsContent=True,
+    ).execute()
+    tabs = doc.get("tabs") or []
+    if not tabs:
+        body = doc.get("body", {})
+        return _structural_elements_to_text(body.get("content", [])), []
+
+    warnings: list[str] = []
+    parsed_tabs: list[dict] = []
+
+    def visit(tab: dict) -> None:
+        props = tab.get("tabProperties", {})
+        title = props.get("title") or "Untitled tab"
+        body = tab.get("documentTab", {}).get("body", {})
+        text = _structural_elements_to_text(body.get("content", []))
+        parsed_tabs.append({
+            "id": props.get("tabId") or "",
+            "title": title,
+            "content": text,
+        })
+        for child in tab.get("childTabs", []) or []:
+            visit(child)
+
+    for tab in tabs:
+        visit(tab)
+    warnings.append("Pulled Google Docs tabs into ResearchBuddy tab markers.")
+    return serialize_tabs(parsed_tabs), warnings
+
+
+def trash_file(service, file_id: str) -> None:
+    if file_id:
+        service.files().update(fileId=file_id, body={"trashed": True}).execute()
