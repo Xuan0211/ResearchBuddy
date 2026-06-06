@@ -18,6 +18,8 @@ rsync -avz --delete \
   --exclude='.git' \
   --exclude='frontend/.git' \
   --exclude='backend/db.sqlite3' \
+  --exclude='backend/projects/' \
+  --exclude='backend/images/' \
   --exclude='.env' \
   --exclude='.env.prod' \
   "$LOCAL_DIR/" "$SERVER:$APP_DIR/"
