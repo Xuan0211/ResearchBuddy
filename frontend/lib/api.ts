@@ -16,7 +16,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
-    throw new Error(err.detail ?? "Request failed")
+    throw new Error(formatApiError(err.detail ?? err.message ?? "Request failed"))
   }
   if (res.status === 204) return undefined as T
   return res.json()
@@ -52,10 +52,29 @@ export const api = {
     })
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }))
-      throw new Error(err.detail ?? "Download failed")
+      throw new Error(formatApiError(err.detail ?? "Download failed"))
     }
     return res.blob()
   },
+}
+
+function formatApiError(detail: unknown): string {
+  if (typeof detail === "string") return detail
+  if (!detail || typeof detail !== "object") return "Request failed"
+
+  const d = detail as Record<string, unknown>
+  const lines = [
+    typeof d.message === "string" ? d.message : "Request failed",
+    typeof d.operation === "string" ? `Operation: ${d.operation}` : "",
+    typeof d.request_id === "string" ? `Request ID: ${d.request_id}` : "",
+    typeof d.error_type === "string" ? `Type: ${d.error_type}` : "",
+    typeof d.error === "string" ? `Error: ${d.error}` : "",
+    d.google_status ? `Google status: ${d.google_status}` : "",
+    typeof d.google_reason === "string" ? `Google reason: ${d.google_reason}` : "",
+    typeof d.google_response === "string" ? `Google response: ${d.google_response}` : "",
+  ].filter(Boolean)
+
+  return lines.join("\n")
 }
 
 export const auth = {

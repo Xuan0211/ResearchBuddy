@@ -31,11 +31,11 @@ export default function DriveSyncControls({
     try {
       if (mode === "mapped" && link) {
         // Smart sync: auto-detect direction based on timestamps
-        const res = await api.post<{ direction: "push" | "pull"; drive_link?: string }>(
+        const res = await api.post<{ direction: "push" | "pull" | "noop"; drive_link?: string }>(
           `/api/projects/${projectId}/${resource}/${itemId}/smart-sync`,
           {},
         )
-        setLastDirection(res.direction)
+        if (res.direction === "push" || res.direction === "pull") setLastDirection(res.direction)
         if (res.drive_link) setLink(res.drive_link)
       } else {
         // Explicit push for new/existing modes

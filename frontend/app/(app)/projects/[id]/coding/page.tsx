@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation"
 import { BookOpen, Plus, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Codebook } from "@/lib/types"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 export default function CodingPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -39,6 +40,8 @@ export default function CodingPage() {
 
   return (
     <div className="p-6 max-w-4xl space-y-5">
+      <SectionResourcesPanel projectId={projectId} section="coding" title="Coding docs and skills" />
+
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-medium">Coding</h3>

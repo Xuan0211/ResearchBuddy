@@ -1,5 +1,5 @@
 "use client"
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
 import { ArrowDown, ArrowUp, Download, Plus, RefreshCw, Trash2 } from "lucide-react"
@@ -14,6 +14,7 @@ export default function DocDetailPage() {
   const [doc, setDoc] = useState<Document & { _body?: string } | null>(null)
   const [cited, setCited] = useState<Paper[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMessage, setLoadingMessage] = useState("Loading…")
   const [saveStatus, setSaveStatus] = useState<"" | "saving" | "saved">("")
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
@@ -24,42 +25,60 @@ export default function DocDetailPage() {
   const [driveMode, setDriveMode] = useState<"mapped" | "new" | "existing">("mapped")
   const [driveTarget, setDriveTarget] = useState("")
   const [activeTabId, setActiveTabId] = useState("")
-  const autoSyncedRef = useRef(false)
 
   useEffect(() => {
-    Promise.all([
-      api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`),
-      api.get<{ document: Document & { _body: string }; cited_papers: Paper[] }>(
-        `/api/projects/${projectId}/docs/${docId}/context`
-      ).catch(() => null),
-      api.get<{ drive_link: string | null }>(`/api/projects/${projectId}/docs/${docId}/drive-link`).catch(() => null),
-    ]).then(([d, ctx, driveRes]) => {
-      setDoc(d)
-      setTitleDraft(d.title)
-      setActiveTabId(d.tabs?.[0]?.id ?? "main")
-      if (ctx) setCited(ctx.cited_papers)
-      if (driveRes) setDriveLink(driveRes.drive_link)
-    }).finally(() => setLoading(false))
-  }, [projectId, docId])
+    let cancelled = false
 
-  // Auto smart-sync once per open when Drive is linked
-  useEffect(() => {
-    if (!driveLink || autoSyncedRef.current) return
-    autoSyncedRef.current = true
-    api.post<{ direction: "push" | "pull"; drive_link?: string }>(
-      `/api/projects/${projectId}/docs/${docId}/smart-sync`, {}
-    ).then(async res => {
-      setSyncDir(res.direction)
-      setTimeout(() => setSyncDir(null), 3000)
-      if (res.direction === "pull") {
-        const updated = await api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`)
-        setDoc(updated)
-        setActiveTabId(updated.tabs?.[0]?.id ?? "main")
-      } else if (res.drive_link) {
-        setDriveLink(res.drive_link)
+    async function loadDoc() {
+      setLoading(true)
+      setLoadingMessage("Loading…")
+      try {
+        const [initialDoc, ctx, driveRes] = await Promise.all([
+          api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`),
+          api.get<{ document: Document & { _body: string }; cited_papers: Paper[] }>(
+            `/api/projects/${projectId}/docs/${docId}/context`
+          ).catch(() => null),
+          api.get<{ drive_link: string | null }>(`/api/projects/${projectId}/docs/${docId}/drive-link`).catch(() => null),
+        ])
+
+        let nextDoc = initialDoc
+        let nextDriveLink = driveRes?.drive_link ?? null
+        if (nextDriveLink) {
+          setLoadingMessage("Checking Google Drive…")
+          try {
+            const res = await api.post<{ direction: "push" | "pull" | "noop"; drive_link?: string }>(
+              `/api/projects/${projectId}/docs/${docId}/smart-sync`,
+              {},
+            )
+            if (res.direction === "pull") {
+              nextDoc = await api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`)
+            }
+            if (res.drive_link) nextDriveLink = res.drive_link
+            if (res.direction === "push" || res.direction === "pull") {
+              setSyncDir(res.direction)
+              setTimeout(() => setSyncDir(null), 3000)
+            }
+          } catch (err: any) {
+            alert(err.message)
+          }
+        }
+
+        if (cancelled) return
+        setDoc(nextDoc)
+        setTitleDraft(nextDoc.title)
+        setActiveTabId(nextDoc.tabs?.[0]?.id ?? "main")
+        setDriveLink(nextDriveLink)
+        if (ctx) setCited(ctx.cited_papers)
+      } catch (err: any) {
+        if (!cancelled) alert(err.message)
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-    }).catch(() => {})
-  }, [driveLink, projectId, docId])
+    }
+
+    loadDoc()
+    return () => { cancelled = true }
+  }, [projectId, docId])
 
   const handleSave = useCallback(async (content: string) => {
     setSaveStatus("saving")
@@ -88,11 +107,13 @@ export default function DocDetailPage() {
     setSyncDir(null)
     try {
       if (driveMode === "mapped") {
-        const res = await api.post<{ direction: "push" | "pull"; drive_link?: string }>(
+        const res = await api.post<{ direction: "push" | "pull" | "noop"; drive_link?: string }>(
           `/api/projects/${projectId}/docs/${docId}/smart-sync`, {}
         )
-        setSyncDir(res.direction)
-        setTimeout(() => setSyncDir(null), 3000)
+        if (res.direction === "push" || res.direction === "pull") {
+          setSyncDir(res.direction)
+          setTimeout(() => setSyncDir(null), 3000)
+        }
         if (res.direction === "pull") {
           const updated = await api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`)
           setDoc(updated)
@@ -176,7 +197,7 @@ export default function DocDetailPage() {
     setActiveTabId(updated.tabs?.[0]?.id ?? "main")
   }
 
-  if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
+  if (loading) return <div className="p-8 text-sm text-gray-500">{loadingMessage}</div>
   if (!doc) return <div className="p-8 text-sm text-red-500">Document not found</div>
   const tabs = doc.tabs?.length ? doc.tabs : [{ id: "main", title: "Main", content: doc._body ?? "" }]
   const activeTab = tabs.find(tab => tab.id === activeTabId) ?? tabs[0]

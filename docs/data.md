@@ -74,6 +74,8 @@ sudo docker cp researchbuddy-backend-1:/backend/projects /home/ubuntu/projects_e
 
 ```bash
 --exclude='backend/db.sqlite3'
+--exclude='backend/*.sqlite3'
+--exclude='backend/*.sqlite3.*'
 --exclude='backend/projects/'
 --exclude='backend/images/'
 ```

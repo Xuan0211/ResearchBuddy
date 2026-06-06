@@ -1,6 +1,7 @@
 """Read/write project files via a temporary clone of the bare repo."""
 import shutil
 from contextlib import contextmanager
+from datetime import datetime
 from pathlib import Path
 
 import git
@@ -63,3 +64,13 @@ def list_project_dir(project_id: str, rel_dir: str) -> list[str]:
     except KeyError:
         return []
     return [item.path for item in tree.traverse() if item.type == "blob"]
+
+
+def file_last_commit_time(project_id: str, rel_path: str) -> datetime | None:
+    """Return the commit time of the latest commit touching a file."""
+    bare = settings.projects_dir / f"{project_id}.git"
+    repo = git.Repo(str(bare))
+    commits = list(repo.iter_commits("HEAD", paths=rel_path, max_count=1))
+    if not commits:
+        return None
+    return commits[0].committed_datetime

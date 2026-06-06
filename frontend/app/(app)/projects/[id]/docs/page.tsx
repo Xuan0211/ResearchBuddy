@@ -1,5 +1,6 @@
 "use client"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { useParams, useRouter } from "next/navigation"
 import { ChevronRight, Folder, FolderPlus, MoreHorizontal, RefreshCw, X } from "lucide-react"
 import { api } from "@/lib/api"
@@ -21,10 +22,35 @@ function DocMenu({
   const [showMove, setShowMove] = useState(false)
   const [target, setTarget] = useState("")
   const ref = useRef<HTMLDivElement>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 })
+
+  function updateMenuPosition() {
+    const button = buttonRef.current
+    if (!button) return
+    const rect = button.getBoundingClientRect()
+    const width = 176
+    const height = showMove ? 154 : 86
+    const gap = 6
+    const top = rect.bottom + gap + height > window.innerHeight
+      ? Math.max(8, rect.top - height - gap)
+      : rect.bottom + gap
+    const left = Math.min(
+      window.innerWidth - width - 8,
+      Math.max(8, rect.right - width),
+    )
+    setMenuPos({ top, left })
+  }
 
   useEffect(() => {
     function handler(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      const targetNode = e.target as Node
+      if (
+        ref.current &&
+        !ref.current.contains(targetNode) &&
+        !menuRef.current?.contains(targetNode)
+      ) {
         setOpen(false); setShowMove(false)
       }
     }
@@ -32,50 +58,73 @@ function DocMenu({
     return () => document.removeEventListener("mousedown", handler)
   }, [open])
 
+  useLayoutEffect(() => {
+    if (!open) return
+    updateMenuPosition()
+  }, [open, showMove])
+
+  useEffect(() => {
+    if (!open) return
+    window.addEventListener("resize", updateMenuPosition)
+    window.addEventListener("scroll", updateMenuPosition, true)
+    return () => {
+      window.removeEventListener("resize", updateMenuPosition)
+      window.removeEventListener("scroll", updateMenuPosition, true)
+    }
+  }, [open, showMove])
+
+  const menu = open && typeof document !== "undefined" ? createPortal(
+    <div
+      ref={menuRef}
+      style={{ top: menuPos.top, left: menuPos.left }}
+      className="fixed z-[1000] bg-white border border-gray-100 rounded-xl shadow-lg w-44 py-1 text-xs"
+      onClick={e => e.stopPropagation()}
+    >
+      {!showMove ? (
+        <>
+          <button onClick={() => setShowMove(true)}
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2">
+            <Folder size={12} className="text-gray-400" /> Move to folder
+          </button>
+          <button onClick={() => { onDelete(); setOpen(false) }}
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 text-red-500 flex items-center gap-2">
+            <X size={12} /> Delete
+          </button>
+        </>
+      ) : (
+        <div className="px-2 py-1.5 space-y-1.5">
+          <p className="text-[11px] text-gray-500 font-medium px-1">Move to folder</p>
+          <input
+            autoFocus
+            list="move-folder-list"
+            value={target}
+            onChange={e => setTarget(e.target.value)}
+            placeholder="Folder name or blank"
+            className="w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <datalist id="move-folder-list">
+            <option value="" />
+            {folders.map(f => <option key={f} value={f} />)}
+          </datalist>
+          <div className="flex gap-1">
+            <button onClick={() => { onMove(target.trim()); setOpen(false); setShowMove(false) }}
+              className="flex-1 bg-black text-white rounded px-2 py-1 text-[11px]">Move</button>
+            <button onClick={() => setShowMove(false)}
+              className="text-gray-400 hover:text-gray-700 px-1"><X size={12} /></button>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body,
+  ) : null
+
   return (
     <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
-      <button onClick={() => setOpen(v => !v)}
+      <button ref={buttonRef} onClick={() => setOpen(v => !v)}
         className="p-1 rounded text-gray-300 hover:text-gray-600 hover:bg-gray-100">
         <MoreHorizontal size={14} />
       </button>
-      {open && (
-        <div className="absolute right-0 top-6 z-50 bg-white border border-gray-100 rounded-xl shadow-lg w-44 py-1 text-xs">
-          {!showMove ? (
-            <>
-              <button onClick={() => setShowMove(true)}
-                className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center gap-2">
-                <Folder size={12} className="text-gray-400" /> Move to folder
-              </button>
-              <button onClick={() => { onDelete(); setOpen(false) }}
-                className="w-full text-left px-3 py-2 hover:bg-gray-50 text-red-500 flex items-center gap-2">
-                <X size={12} /> Delete
-              </button>
-            </>
-          ) : (
-            <div className="px-2 py-1.5 space-y-1.5">
-              <p className="text-[11px] text-gray-500 font-medium px-1">Move to folder</p>
-              <input
-                autoFocus
-                list="move-folder-list"
-                value={target}
-                onChange={e => setTarget(e.target.value)}
-                placeholder="Folder name or blank"
-                className="w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-              />
-              <datalist id="move-folder-list">
-                <option value="" />
-                {folders.map(f => <option key={f} value={f} />)}
-              </datalist>
-              <div className="flex gap-1">
-                <button onClick={() => { onMove(target.trim()); setOpen(false); setShowMove(false) }}
-                  className="flex-1 bg-black text-white rounded px-2 py-1 text-[11px]">Move</button>
-                <button onClick={() => setShowMove(false)}
-                  className="text-gray-400 hover:text-gray-700 px-1"><X size={12} /></button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+      {menu}
     </div>
   )
 }

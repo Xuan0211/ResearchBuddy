@@ -1,5 +1,6 @@
+import json
 import re
-from datetime import date as date_type
+from datetime import date as date_type, date, timedelta
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -37,6 +38,44 @@ MEETING_TABS = [
 ]
 
 MEETING_TEMPLATE = dt.serialize_tabs(MEETING_TABS, "Pre-meeting")
+
+
+MEETING_SETTINGS_PATH = ".researchbuddy/meeting-settings.json"
+
+WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+class MeetingSettings(BaseModel):
+    default_location: str = ""
+    recurring_weekday: int | None = None  # 0=Mon..6=Sun
+    recurring_time: str = ""  # "HH:MM"
+    recurring_duration_minutes: int = 60
+
+
+def _load_meeting_settings(project_id: str) -> MeetingSettings:
+    try:
+        content = read_project_file(project_id, MEETING_SETTINGS_PATH)
+        data = json.loads(content)
+        return MeetingSettings(**data)
+    except (FileNotFoundError, Exception):
+        return MeetingSettings()
+
+
+def _save_meeting_settings(project_id: str, settings: MeetingSettings) -> None:
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Update meeting settings"
+        settings_path = wt / MEETING_SETTINGS_PATH
+        settings_path.parent.mkdir(parents=True, exist_ok=True)
+        settings_path.write_text(json.dumps(settings.model_dump(), indent=2), encoding="utf-8")
+
+
+def _next_weekday_date(weekday: int) -> date:
+    """Return the next occurrence of the given weekday (0=Mon..6=Sun) from today."""
+    today = date.today()
+    days_ahead = weekday - today.weekday()
+    if days_ahead <= 0:
+        days_ahead += 7
+    return today + timedelta(days=days_ahead)
 
 
 class MeetingIn(BaseModel):
@@ -84,6 +123,10 @@ class MeetingTabIn(BaseModel):
 class MeetingTabPatch(BaseModel):
     title: str | None = None
     content: str | None = None
+
+
+class TranscriptAnalysisIn(BaseModel):
+    transcript: str
 
 
 def _mtg_id(d: date_type, title: str) -> str:
@@ -141,6 +184,59 @@ def _meeting_public(meta: dict) -> dict:
     return result
 
 
+def _clean_transcript_lines(transcript: str) -> list[str]:
+    return [line.strip() for line in transcript.splitlines() if line.strip()]
+
+
+def _pick_lines(lines: list[str], keywords: tuple[str, ...], limit: int = 8) -> list[str]:
+    hits: list[str] = []
+    for line in lines:
+        lower = line.lower()
+        if any(keyword in lower for keyword in keywords):
+            cleaned = re.sub(r"^\[[^\]]+\]\s*", "", line)
+            hits.append(cleaned[:320])
+        if len(hits) >= limit:
+            break
+    return hits
+
+
+def _transcript_analysis_markdown(transcript: str) -> tuple[str, str]:
+    lines = _clean_transcript_lines(transcript)
+    decisions = _pick_lines(lines, ("decided", "decision", "conclusion", "agree", "agreed", "决定", "结论", "同意"))
+    todos = _pick_lines(lines, ("todo", "action", "next step", "follow up", "owner", "负责", "行动", "待办", "下一步"))
+    questions = _pick_lines(lines, ("?", "question", "unclear", "blocker", "问题", "疑问", "阻塞"))
+    topics = lines[:6]
+
+    if not decisions:
+        decisions = ["Review the transcript summary and add final conclusions."]
+    if not todos:
+        todos = ["Confirm next actions and owners."]
+
+    def bullets(items: list[str]) -> str:
+        return "\n".join(f"- {item}" for item in items)
+
+    summary = (
+        "## Auto Analysis\n\n"
+        "### Discussion Points\n"
+        f"{bullets(topics) if topics else '- No transcript content provided.'}\n\n"
+        "### Decisions / Conclusions\n"
+        f"{bullets(decisions)}\n\n"
+        "### Action Items\n"
+        f"{bullets(todos)}\n\n"
+        "### Open Questions\n"
+        f"{bullets(questions) if questions else '- None detected.'}\n\n"
+        "## Transcript\n\n"
+        f"{transcript.strip()}\n"
+    )
+    post_meeting = (
+        "## Conclusions\n\n"
+        f"{bullets(decisions)}\n\n"
+        "## TODO\n\n"
+        f"{bullets(todos)}\n"
+    )
+    return summary, post_meeting
+
+
 def _resolve_attendees(project_id: str, session: Session, attendees: list[str]) -> list[dict]:
     contacts = list_contacts(project_id, session)
     by_handle = {c["handle"].lower(): c for c in contacts if c.get("handle")}
@@ -155,6 +251,28 @@ def _resolve_attendees(project_id: str, session: Session, attendees: list[str]) 
         name = contact.get("name", "") if contact else value
         resolved.append({"name": name, "email": email, "raw": raw})
     return resolved
+
+
+@router.get("/settings")
+def get_meeting_settings(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    return _load_meeting_settings(project_id).model_dump()
+
+
+@router.patch("/settings")
+def update_meeting_settings(
+    project_id: str,
+    body: MeetingSettings,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    _save_meeting_settings(project_id, body)
+    return body.model_dump()
 
 
 @router.get("")
@@ -174,7 +292,14 @@ def list_meetings(
             meetings.append(_meeting_public(m))
         except Exception:
             continue
-    return meetings
+
+    # Compute next_meeting_date from recurring settings
+    settings = _load_meeting_settings(project_id)
+    next_date = None
+    if settings.recurring_weekday is not None:
+        next_date = _next_weekday_date(settings.recurring_weekday).isoformat()
+
+    return {"meetings": meetings, "next_meeting_date": next_date, "settings": settings.model_dump()}
 
 
 @router.post("", status_code=201)
@@ -185,14 +310,34 @@ def create_meeting(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session, min_role="member")
+
+    # Auto-fill from recurring settings (body fields take precedence)
+    mtg_settings = _load_meeting_settings(project_id)
+
+    location = body.location
+    start_time = body.start_time
+    end_time = body.end_time
+
+    if not location and mtg_settings.default_location:
+        location = mtg_settings.default_location
+    if not start_time and mtg_settings.recurring_time:
+        start_time = mtg_settings.recurring_time
+    if not end_time and mtg_settings.recurring_time and mtg_settings.recurring_duration_minutes:
+        try:
+            h, m = map(int, mtg_settings.recurring_time.split(":"))
+            total_minutes = h * 60 + m + mtg_settings.recurring_duration_minutes
+            end_time = f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+        except Exception:
+            pass
+
     mtg_id = _mtg_id(body.date, body.title)
     meta = {
         "id": mtg_id,
         "date": body.date.isoformat(),
         "title": body.title,
-        "start_time": body.start_time,
-        "end_time": body.end_time,
-        "location": body.location,
+        "start_time": start_time,
+        "end_time": end_time,
+        "location": location,
         "attendees": body.attendees,
         "document_type": "meeting",
         "links": {
@@ -384,6 +529,37 @@ def delete_meeting(
         if not path.exists():
             raise HTTPException(404)
         path.unlink()
+
+
+@router.post("/{mtg_id}/analyze-transcript")
+def analyze_meeting_transcript(
+    project_id: str,
+    mtg_id: str,
+    body: TranscriptAnalysisIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    transcript_tab, post_meeting_tab = _transcript_analysis_markdown(body.transcript)
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Analyze meeting transcript: {mtg_id}"
+        path = wt / "meetings" / f"{mtg_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, current = fm.read(path)
+        tabs = dt.parse_tabs(current, "Pre-meeting")
+        tab_by_id = {tab["id"]: tab for tab in tabs}
+        if "transcript-notes" in tab_by_id:
+            tab_by_id["transcript-notes"]["content"] = transcript_tab
+        else:
+            tabs.append({"id": "transcript-notes", "title": "Transcript / Notes", "content": transcript_tab})
+        if "post-meeting" in tab_by_id:
+            tab_by_id["post-meeting"]["content"] = post_meeting_tab
+        else:
+            tabs.append({"id": "post-meeting", "title": "Post-meeting", "content": post_meeting_tab})
+        next_content = dt.serialize_tabs(tabs, "Pre-meeting")
+        fm.write(path, meta, next_content)
+    return {"tabs": dt.parse_tabs(next_content, "Pre-meeting")}
 
 
 @router.get("/{mtg_id}/ics")
@@ -674,6 +850,115 @@ async def smart_sync_meeting(
         session.add(mapping)
         session.commit()
         return {"direction": "push", "ok": True, "drive_link": result.get("webViewLink", "")}
+
+
+@router.post("/mtg-log/sync")
+async def sync_mtg_log(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Create / update a master MTG_LOG Google Doc in the Drive Meetings folder.
+
+    The log contains a table of all meetings (newest first) with dates, titles,
+    and links to the individual synced Drive documents.
+    """
+    from ..services import google_drive as gd
+    from ..models import DriveFileMapping, Project
+    from sqlmodel import select as sel
+
+    check_member(project_id, current_user, session, min_role="member")
+    token = gd.load_token(str(current_user.id), session)
+    if not token:
+        raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
+
+    # Load all meetings sorted newest-first
+    paths = list_project_dir(project_id, "meetings")
+    meetings_meta: list[dict] = []
+    for p in sorted(paths, reverse=True):
+        if not p.endswith(".md"):
+            continue
+        try:
+            m = _parse_meeting(project_id, p)
+            meetings_meta.append(_meeting_public(m))
+        except Exception:
+            continue
+
+    # Resolve Drive links for each meeting
+    mappings_by_id: dict[str, DriveFileMapping] = {}
+    all_mappings = session.exec(
+        sel(DriveFileMapping).where(
+            DriveFileMapping.project_id == project_id,
+            DriveFileMapping.item_type == "meeting",
+        )
+    ).all()
+    for mp in all_mappings:
+        mappings_by_id[mp.item_id] = mp
+
+    # Build MTG LOG markdown
+    rows: list[str] = ["| Date | Title | Notes |", "|---|---|---|"]
+    for m in meetings_meta:
+        date = m.get("date", "")
+        title = m.get("title", "")
+        mtg_id = m.get("id", "")
+        mapping = mappings_by_id.get(mtg_id)
+        if mapping and mapping.drive_link:
+            link_cell = f"[Open ↗]({mapping.drive_link})"
+        else:
+            link_cell = "—"
+        rows.append(f"| {date} | {title} | {link_cell} |")
+
+    log_content = (
+        "# Meeting Log\n\n"
+        f"_Last updated by ResearchBuddy. {len(meetings_meta)} meeting(s)._\n\n"
+        + "\n".join(rows)
+        + "\n"
+    )
+
+    project = session.get(Project, project_id)
+    log_tabs = [{"id": "main", "title": "MTG Log", "content": log_content}]
+
+    # Find existing MTG_LOG mapping
+    log_mapping = session.exec(
+        sel(DriveFileMapping).where(
+            DriveFileMapping.project_id == project_id,
+            DriveFileMapping.item_type == "mtg-log",
+            DriveFileMapping.item_id == "mtg-log",
+        )
+    ).first()
+
+    try:
+        service = gd.get_service(token, str(current_user.id), session)
+        docs_service = gd.get_docs_service(token, str(current_user.id), session)
+        mtg_folder = gd.ensure_project_drive_child_folder(
+            service, project_id, project.name, "Meetings"
+        )
+        result = gd.upsert_google_doc_tabs(
+            service, docs_service, "MTG_LOG", log_tabs, mtg_folder,
+            existing_file_id=log_mapping.drive_file_id if log_mapping else None,
+        )
+    except Exception as exc:
+        raise HTTPException(502, f"Google Drive sync failed: {exc}")
+
+    from uuid import UUID
+    from datetime import datetime, timezone
+    if log_mapping:
+        log_mapping.drive_file_id = result["id"]
+        log_mapping.drive_link = result.get("webViewLink", "")
+        log_mapping.synced_at = datetime.now(timezone.utc)
+        session.add(log_mapping)
+    else:
+        session.add(DriveFileMapping(
+            project_id=UUID(project_id), item_type="mtg-log", item_id="mtg-log",
+            drive_file_id=result["id"], drive_link=result.get("webViewLink", ""),
+        ))
+    session.commit()
+
+    return {
+        "ok": True,
+        "drive_link": result.get("webViewLink", ""),
+        "synced": len(meetings_meta),
+    }
 
 
 @router.get("/{mtg_id}/drive-link")

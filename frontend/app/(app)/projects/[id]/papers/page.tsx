@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation"
 import { RefreshCw, Settings, Download, Search, Image } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 export default function PapersPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -203,6 +204,10 @@ export default function PapersPage() {
 
       {/* ── Gallery ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="mb-4 space-y-3">
+          <SectionResourcesPanel projectId={projectId} section="papers" title="Papers docs and skills" />
+          <AIPapersPanel projectId={projectId} />
+        </div>
         {filtered.length === 0 ? (
           <p className="text-sm text-gray-500">No papers match your filters.</p>
         ) : (
@@ -230,6 +235,66 @@ export default function PapersPage() {
             setProject(await api.get<Project>(`/api/projects/${projectId}`))
           }}
         />
+      )}
+    </div>
+  )
+}
+
+// ── AI Generated Papers section ───────────────────────────────────────────────
+
+interface AIEntry { key: string; title: string; author: string; year: string; writing_id: string; bib_path: string }
+
+export function AIPapersPanel({ projectId }: { projectId: string }) {
+  const [entries, setEntries] = useState<AIEntry[]>([])
+  const [open, setOpen] = useState(false)
+  const [confirming, setConfirming] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    api.get<AIEntry[]>(`/api/projects/${projectId}/papers/ai-generated`)
+      .then(setEntries).catch(() => {})
+  }, [open, projectId])
+
+  async function confirm(e: AIEntry) {
+    setConfirming(e.key)
+    try {
+      await api.post(`/api/projects/${projectId}/papers/ai-generated/confirm`, { writing_id: e.writing_id, key: e.key })
+      setEntries(prev => prev.filter(x => x.key !== e.key))
+    } catch (err: any) { alert(err.message) }
+    finally { setConfirming(null) }
+  }
+
+  if (!open) return (
+    <button onClick={() => setOpen(true)}
+      className="text-xs text-gray-400 hover:text-black underline underline-offset-2">
+      Show AI-generated references
+    </button>
+  )
+
+  return (
+    <div className="border border-yellow-200 rounded-xl bg-yellow-50 p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-yellow-800">AI Generated References ({entries.length})</p>
+        <button onClick={() => setOpen(false)} className="text-yellow-600 hover:text-yellow-900 text-xs">Hide</button>
+      </div>
+      {entries.length === 0 ? (
+        <p className="text-xs text-yellow-700">No AI-generated references found. AI agents write to <code>ai-generated.bib</code> in writing projects.</p>
+      ) : (
+        <div className="space-y-2">
+          {entries.map(e => (
+            <div key={e.key} className="bg-white rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-medium truncate">{e.title || e.key}</p>
+                <p className="text-[10px] text-gray-500">{e.author}{e.year ? ` · ${e.year}` : ""} · <code className="font-mono">@{e.key}</code></p>
+              </div>
+              <button onClick={() => confirm(e)} disabled={confirming === e.key}
+                className="flex-shrink-0 text-xs bg-green-600 text-white px-2 py-1 rounded-md hover:bg-green-700 disabled:opacity-50">
+                {confirming === e.key ? "…" : "Confirm"}
+              </button>
+            </div>
+          ))}
+          <p className="text-[10px] text-yellow-700">Confirming moves the entry to <code>reference.bib</code> in the writing project.</p>
+        </div>
       )}
     </div>
   )

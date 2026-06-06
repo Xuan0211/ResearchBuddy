@@ -1,10 +1,20 @@
 "use client"
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, Pencil, Plus, RefreshCw, Trash2, X } from "lucide-react"
+import { BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, Pencil, Plus, RefreshCw, Settings, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Contact, Meeting } from "@/lib/types"
+
+interface MeetingSettings {
+  default_location: string
+  recurring_weekday: number | null
+  recurring_time: string
+  recurring_duration_minutes: number
+}
+
+const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
 import DriveSyncControls from "@/components/DriveSyncControls"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 export default function MeetingsPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -15,19 +25,28 @@ export default function MeetingsPage() {
   const [contactsOpen, setContactsOpen] = useState(false)
   const [showMeetingForm, setShowMeetingForm] = useState(false)
   const [addingContact, setAddingContact] = useState(false)
-  const [editingContact, setEditingContact] = useState<string | null>(null) // handle being edited
+  const [editingContact, setEditingContact] = useState<string | null>(null)
   const [contactForm, setContactForm] = useState({ name: "", email: "", handle: "" })
   const [meetingForm, setMeetingForm] = useState({ date: "", title: "", start_time: "", end_time: "", location: "", attendees: "" })
+  const [showSettings, setShowSettings] = useState(false)
+  const [settings, setSettings] = useState<MeetingSettings>({ default_location: "", recurring_weekday: null, recurring_time: "", recurring_duration_minutes: 60 })
+  const [nextMeetingDate, setNextMeetingDate] = useState<string | null>(null)
+  const [syncingLog, setSyncingLog] = useState(false)
+  const [logLink, setLogLink] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
     Promise.all([
-      api.get<Meeting[]>(`/api/projects/${projectId}/meetings`),
+      api.get<{ meetings: Meeting[]; next_meeting_date: string | null; settings: MeetingSettings }>(`/api/projects/${projectId}/meetings`),
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).catch(() => [] as Contact[]),
-    ]).then(([mtgs, ctcts]) => {
-      setMeetings(mtgs)
+    ]).then(([res, ctcts]) => {
+      setMeetings(res.meetings)
+      setNextMeetingDate(res.next_meeting_date)
+      setSettings(res.settings)
       setContacts(ctcts)
       if (ctcts.length > 0) setContactsOpen(true)
+      // Pre-fill new meeting date from next_meeting_date
+      if (res.next_meeting_date) setMeetingForm(f => ({ ...f, date: res.next_meeting_date! }))
     }).finally(() => setLoading(false))
   }, [projectId])
 
@@ -55,6 +74,21 @@ export default function MeetingsPage() {
     if (!confirm("Remove this contact?")) return
     await api.delete(`/api/projects/${projectId}/contacts/${handle}`)
     setContacts(prev => prev.filter(c => c.handle !== handle))
+  }
+
+  async function saveSettings(e: React.FormEvent) {
+    e.preventDefault()
+    await api.patch(`/api/projects/${projectId}/meetings/settings`, settings)
+    setShowSettings(false)
+  }
+
+  async function syncMtgLog() {
+    setSyncingLog(true)
+    try {
+      const res = await api.post<{ drive_link: string; synced: number }>(`/api/projects/${projectId}/meetings/mtg-log/sync`)
+      setLogLink(res.drive_link)
+    } catch (err: any) { alert(err.message) }
+    finally { setSyncingLog(false) }
   }
 
   async function createMeeting(e: React.FormEvent) {
@@ -121,6 +155,8 @@ export default function MeetingsPage() {
 
   return (
     <div className="p-6 max-w-5xl space-y-5">
+      <SectionResourcesPanel projectId={projectId} section="meetings" title="Meeting docs and skills" />
+
       {/* ── Team / Contacts ── */}
       <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">
         <button
@@ -167,12 +203,72 @@ export default function MeetingsPage() {
 
       {/* ── Meetings ── */}
       <div className="flex items-center justify-between">
-        <h3 className="font-medium text-sm">Meetings</h3>
-        <button onClick={() => setShowMeetingForm(v => !v)}
-          className="inline-flex items-center gap-1.5 bg-black text-white text-xs px-3 py-1.5 rounded-lg">
-          <CalendarPlus size={13} /> New meeting
-        </button>
+        <div className="flex items-center gap-2">
+          <h3 className="font-medium text-sm">Meetings</h3>
+          {nextMeetingDate && <span className="text-xs text-gray-400">Next: {nextMeetingDate}</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          {logLink && (
+            <a href={logLink} target="_blank" rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-green-600 border border-green-200 px-2 py-1.5 rounded-lg hover:bg-green-50">
+              <BookOpen size={11} /> MTG Log ↗
+            </a>
+          )}
+          <button onClick={syncMtgLog} disabled={syncingLog}
+            className="inline-flex items-center gap-1.5 text-xs text-gray-500 border px-2 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            <RefreshCw size={11} className={syncingLog ? "animate-spin" : ""} />
+            {syncingLog ? "Syncing…" : "Sync Log"}
+          </button>
+          <button onClick={() => setShowSettings(v => !v)}
+            className="p-1.5 rounded-lg border text-gray-500 hover:bg-gray-50">
+            <Settings size={13} />
+          </button>
+          <button onClick={() => setShowMeetingForm(v => !v)}
+            className="inline-flex items-center gap-1.5 bg-black text-white text-xs px-3 py-1.5 rounded-lg">
+            <CalendarPlus size={13} /> New meeting
+          </button>
+        </div>
       </div>
+
+      {showSettings && (
+        <form onSubmit={saveSettings} className="border rounded-xl p-4 bg-white shadow-sm space-y-3">
+          <p className="text-xs font-semibold text-gray-600">Meeting Settings</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Default location / room</label>
+              <input value={settings.default_location}
+                onChange={e => setSettings(s => ({ ...s, default_location: e.target.value }))}
+                placeholder="Zoom, Room 301…"
+                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Recurring day</label>
+              <select value={settings.recurring_weekday ?? ""}
+                onChange={e => setSettings(s => ({ ...s, recurring_weekday: e.target.value === "" ? null : Number(e.target.value) }))}
+                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none">
+                <option value="">None</option>
+                {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Recurring time</label>
+              <input type="time" value={settings.recurring_time}
+                onChange={e => setSettings(s => ({ ...s, recurring_time: e.target.value }))}
+                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
+            </div>
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Duration (minutes)</label>
+              <input type="number" value={settings.recurring_duration_minutes} min={15} step={15}
+                onChange={e => setSettings(s => ({ ...s, recurring_duration_minutes: Number(e.target.value) }))}
+                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" className="bg-black text-white text-xs px-3 py-1.5 rounded-lg">Save</button>
+            <button type="button" onClick={() => setShowSettings(false)} className="text-xs text-gray-500 px-3">Cancel</button>
+          </div>
+        </form>
+      )}
 
       {showMeetingForm && (
         <form onSubmit={createMeeting} className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-sm">

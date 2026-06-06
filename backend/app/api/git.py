@@ -1,8 +1,9 @@
 """HTTP Smart Protocol for git clone/push/pull on project repos."""
+import logging
 import subprocess
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import Response
 from fastapi.security import HTTPBasicCredentials
 from sqlmodel import Session, select
@@ -14,6 +15,7 @@ from .projects import check_member
 from ..core.db import get_session
 
 router = APIRouter(prefix="/git", tags=["git"])
+logger = logging.getLogger(__name__)
 
 GIT_SERVICES = {"git-upload-pack", "git-receive-pack"}
 
@@ -87,6 +89,7 @@ async def git_rpc(
     project_id: str,
     service: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_git_user),
     session: Session = Depends(get_session),
 ):
@@ -110,4 +113,18 @@ async def git_rpc(
     if service == "git-receive-pack":
         from ..services.paper_cache import invalidate
         invalidate(project_id)
+        background_tasks.add_task(_auto_push_docs_after_git_receive, project_id, str(current_user.id))
     return Response(content=result.stdout, media_type=f"application/x-{service}-result")
+
+
+def _auto_push_docs_after_git_receive(project_id: str, user_id: str) -> None:
+    from ..services.drive_doc_sync import auto_push_updated_docs_to_drive
+
+    try:
+        result = auto_push_updated_docs_to_drive(project_id, user_id)
+        logger.info("Automatic Drive doc push after git receive-pack finished: %s", result)
+    except Exception:
+        logger.exception(
+            "Automatic Drive doc push after git receive-pack crashed",
+            extra={"project_id": project_id, "user_id": user_id},
+        )

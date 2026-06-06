@@ -21,6 +21,8 @@ export default function MeetingDetailPage() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [metaDraft, setMetaDraft] = useState({ date: "", start_time: "", end_time: "", location: "", attendees: "" })
   const [activeTabId, setActiveTabId] = useState("")
+  const [transcriptDraft, setTranscriptDraft] = useState("")
+  const [analyzingTranscript, setAnalyzingTranscript] = useState(false)
 
   useEffect(() => {
     api.get<Meeting>(`/api/projects/${projectId}/meetings/${mtgId}`)
@@ -127,6 +129,26 @@ export default function MeetingDetailPage() {
     setActiveTabId(updated.tabs?.[0]?.id ?? "pre-meeting")
   }
 
+  async function analyzeTranscript() {
+    if (!transcriptDraft.trim()) return
+    setAnalyzingTranscript(true)
+    try {
+      const res = await api.post<{ tabs: DocumentTab[] }>(
+        `/api/projects/${projectId}/meetings/${mtgId}/analyze-transcript`,
+        { transcript: transcriptDraft },
+      )
+      setMeeting(prev => prev ? { ...prev, tabs: res.tabs } : prev)
+      setActiveTabId("transcript-notes")
+      setTranscriptDraft("")
+      setSaved(true)
+      setTimeout(() => setSaved(false), 1600)
+    } catch (err: any) {
+      alert(err.message)
+    } finally {
+      setAnalyzingTranscript(false)
+    }
+  }
+
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading meeting…</div>
   if (!meeting) return <div className="p-8 text-sm text-red-500">Meeting not found</div>
   const tabs = meeting.tabs?.length ? meeting.tabs : [{ id: "pre-meeting", title: "Pre-meeting", content: meeting._body ?? "" }]
@@ -173,6 +195,26 @@ export default function MeetingDetailPage() {
           <button onClick={deleteMeeting} className="flex items-center gap-1 text-xs text-red-500 hover:text-red-700">
             <Trash2 size={11} /> Delete meeting
           </button>
+        </div>
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-gray-500">Transcript analysis</p>
+          <textarea
+            value={transcriptDraft}
+            onChange={e => setTranscriptDraft(e.target.value)}
+            placeholder="Paste transcript"
+            rows={7}
+            className="w-full resize-none rounded-md border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black"
+          />
+          <button
+            onClick={analyzeTranscript}
+            disabled={analyzingTranscript || !transcriptDraft.trim()}
+            className="w-full rounded-md border px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            {analyzingTranscript ? "Analyzing…" : "Analyze into meeting doc"}
+          </button>
+          <p className="text-[11px] leading-4 text-gray-400">
+            Uses the default meeting skill; generated notes stay editable.
+          </p>
         </div>
       </aside>
 

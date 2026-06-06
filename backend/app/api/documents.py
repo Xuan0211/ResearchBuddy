@@ -1,5 +1,6 @@
 import re
 import uuid
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -15,6 +16,7 @@ from .projects import check_member
 from .papers import _parse_paper
 
 router = APIRouter(prefix="/projects/{project_id}/docs", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 MENTION_RE = re.compile(r"(?<![\w@])@([a-zA-Z0-9_.-]+)")
@@ -73,6 +75,44 @@ class DriveSyncIn(BaseModel):
     mode: str = "mapped"  # "mapped" | "new" | "existing"
     drive_url: str = ""
     file_id: str = ""
+
+
+def _drive_http_exception(operation: str, exc: Exception, **context: object) -> HTTPException:
+    """Log and return a user-visible diagnostic for Drive sync failures."""
+    request_id = uuid.uuid4().hex[:10]
+    error = str(exc) or repr(exc)
+    detail: dict[str, object] = {
+        "message": "Google Drive sync failed",
+        "request_id": request_id,
+        "operation": operation,
+        "error_type": type(exc).__name__,
+        "error": error[:1200],
+        "context": context,
+    }
+
+    resp = getattr(exc, "resp", None)
+    status = getattr(resp, "status", None)
+    reason = getattr(resp, "reason", None)
+    if status:
+        detail["google_status"] = status
+    if reason:
+        detail["google_reason"] = reason
+
+    content = getattr(exc, "content", None)
+    if content:
+        if isinstance(content, bytes):
+            content_text = content.decode("utf-8", errors="replace")
+        else:
+            content_text = str(content)
+        detail["google_response"] = content_text[:1200]
+
+    logger.exception(
+        "Google Drive operation failed request_id=%s operation=%s context=%s",
+        request_id,
+        operation,
+        context,
+    )
+    return HTTPException(status_code=502, detail=detail)
 
 
 @router.get("")
@@ -352,25 +392,16 @@ async def sync_doc_to_drive(
     session: Session = Depends(get_session),
 ):
     from ..services import google_drive as gd
-    from ..models import DriveFileMapping, Project
+    from ..services import drive_doc_sync
+    from ..models import DriveFileMapping
     from sqlmodel import select as sel
-    from datetime import datetime, timezone
 
     check_member(project_id, current_user, session, min_role="member")
     token = gd.load_token(str(current_user.id), session)
     if not token:
         raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
 
-    try:
-        meta = _parse_doc(project_id, f"docs/{doc_id}.md")
-    except FileNotFoundError:
-        raise HTTPException(404)
-    content = meta.get("_body", "")
-    title = meta.get("title", doc_id)
-    tabs = meta.get("tabs") or dt.parse_tabs(content, _doc_default_tab_title(meta))
     body = body or DriveSyncIn()
-
-    project = session.get(Project, project_id)
 
     # Check if file already synced
     mapping = session.exec(
@@ -393,40 +424,35 @@ async def sync_doc_to_drive(
     else:
         raise HTTPException(400, "mode must be mapped, new, or existing")
 
-    doc_folder = meta.get("folder", "")
+    doc_folder = ""
     try:
-        service = gd.get_service(token, str(current_user.id), session)
-        docs_service = gd.get_docs_service(token, str(current_user.id), session)
-        docs_root = gd.ensure_project_drive_child_folder(service, project_id, project.name, "Docs")
-        docs_folder = gd.get_or_create_folder(service, doc_folder, docs_root) if doc_folder else docs_root
-        result = gd.upsert_google_doc_tabs(
-            service,
-            docs_service,
-            title,
-            tabs,
-            docs_folder,
-            existing_file_id=target_file_id,
+        meta = _parse_doc(project_id, f"docs/{doc_id}.md")
+        doc_folder = meta.get("folder", "")
+        result = drive_doc_sync.push_doc_to_drive(
+            session,
+            token,
+            str(current_user.id),
+            project_id,
+            doc_id,
+            mapping=mapping,
+            target_file_id=target_file_id,
+            force_new=(body.mode == "new"),
         )
+    except FileNotFoundError:
+        raise HTTPException(404)
     except Exception as exc:
-        raise HTTPException(502, f"Google Drive sync failed: {exc}")
+        raise _drive_http_exception(
+            "doc.sync_to_drive",
+            exc,
+            project_id=project_id,
+            doc_id=doc_id,
+            mode=body.mode,
+            has_mapping=bool(mapping),
+            target_file_id=target_file_id or "",
+            folder=doc_folder,
+        )
 
-    if mapping:
-        mapping.drive_file_id = result["id"]
-        mapping.drive_link = result.get("webViewLink", "")
-        mapping.synced_at = datetime.now(timezone.utc)
-        session.add(mapping)
-    else:
-        from uuid import UUID
-        session.add(DriveFileMapping(
-            project_id=UUID(project_id),
-            item_type="doc",
-            item_id=doc_id,
-            drive_file_id=result["id"],
-            drive_link=result.get("webViewLink", ""),
-        ))
-    session.commit()
-
-    return {"ok": True, "drive_link": result.get("webViewLink", "")}
+    return {"ok": True, "drive_link": result.get("drive_link") or result.get("webViewLink", "")}
 
 
 @router.post("/{doc_id}/pull-from-drive")
@@ -437,6 +463,7 @@ async def pull_doc_from_drive(
     session: Session = Depends(get_session),
 ):
     from ..services import google_drive as gd
+    from ..services import drive_doc_sync
     from ..models import DriveFileMapping
     from sqlmodel import select as sel
 
@@ -456,30 +483,24 @@ async def pull_doc_from_drive(
         raise HTTPException(400, "No Drive document is linked yet")
 
     try:
-        docs_service = gd.get_docs_service(token, str(current_user.id), session)
-        text, _ = gd.export_google_doc_tabs_markdown(docs_service, mapping.drive_file_id)
+        drive_doc_sync.pull_doc_from_drive(
+            session,
+            token,
+            str(current_user.id),
+            project_id,
+            doc_id,
+            mapping,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404)
     except Exception as exc:
-        raise HTTPException(502, f"Google Drive pull failed: {exc}")
-
-    pulled_tabs = dt.parse_tabs(text, _doc_default_tab_title({}))
-    if pulled_tabs:
-        pulled_tabs[-1]["content"] = gd.strip_sync_footer(pulled_tabs[-1]["content"])
-    next_content = dt.serialize_tabs(pulled_tabs, _doc_default_tab_title({}))
-
-    from datetime import datetime, timezone
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Pull doc from Drive: {doc_id}"
-        path = wt / "docs" / f"{doc_id}.md"
-        if not path.exists():
-            raise HTTPException(404)
-        meta, _ = fm.read(path)
-        meta["papers"] = _extract_paper_refs(next_content)
-        meta["mentions"] = _extract_mentions(next_content)
-        fm.write(path, meta, next_content)
-
-    mapping.synced_at = datetime.now(timezone.utc)
-    session.add(mapping)
-    session.commit()
+        raise _drive_http_exception(
+            "doc.pull_from_drive",
+            exc,
+            project_id=project_id,
+            doc_id=doc_id,
+            drive_file_id=mapping.drive_file_id,
+        )
 
     return {"ok": True}
 
@@ -493,9 +514,9 @@ async def smart_sync_doc(
 ):
     """Push to Drive or pull from Drive depending on which side was modified more recently."""
     from ..services import google_drive as gd
-    from ..models import DriveFileMapping, Project
+    from ..services import drive_doc_sync
+    from ..models import DriveFileMapping
     from sqlmodel import select as sel
-    from datetime import datetime, timezone, timedelta
 
     check_member(project_id, current_user, session, min_role="member")
     token = gd.load_token(str(current_user.id), session)
@@ -510,97 +531,27 @@ async def smart_sync_doc(
         )
     ).first()
 
-    # No existing mapping → push as new doc
-    if not mapping:
-        try:
-            meta = _parse_doc(project_id, f"docs/{doc_id}.md")
-        except FileNotFoundError:
-            raise HTTPException(404)
-        content = meta.get("_body", "")
-        title = meta.get("title", doc_id)
-        tabs = meta.get("tabs") or dt.parse_tabs(content, _doc_default_tab_title(meta))
-        project = session.get(Project, project_id)
-        doc_folder = meta.get("folder", "")
-        try:
-            service = gd.get_service(token, str(current_user.id), session)
-            docs_service = gd.get_docs_service(token, str(current_user.id), session)
-            docs_root = gd.ensure_project_drive_child_folder(service, project_id, project.name, "Docs")
-            docs_folder = gd.get_or_create_folder(service, doc_folder, docs_root) if doc_folder else docs_root
-            result = gd.upsert_google_doc_tabs(service, docs_service, title, tabs, docs_folder)
-        except Exception as exc:
-            raise HTTPException(502, f"Google Drive sync failed: {exc}")
-        from uuid import UUID
-        session.add(DriveFileMapping(
-            project_id=UUID(project_id),
-            item_type="doc",
-            item_id=doc_id,
-            drive_file_id=result["id"],
-            drive_link=result.get("webViewLink", ""),
-        ))
-        session.commit()
-        return {"direction": "push", "ok": True, "drive_link": result.get("webViewLink", "")}
-
-    # Compare Drive modifiedTime vs synced_at
-    service = gd.get_service(token, str(current_user.id), session)
-    drive_modified = gd.get_file_modified_time(service, mapping.drive_file_id)
-    synced_at = mapping.synced_at
-    if synced_at.tzinfo is None:
-        synced_at = synced_at.replace(tzinfo=timezone.utc)
-
-    if drive_modified and drive_modified > synced_at + timedelta(seconds=5):
-        # Drive is newer → pull
-        try:
-            docs_service = gd.get_docs_service(token, str(current_user.id), session)
-            text, _ = gd.export_google_doc_tabs_markdown(docs_service, mapping.drive_file_id)
-        except Exception as exc:
-            raise HTTPException(502, f"Google Drive pull failed: {exc}")
-
-        pulled_tabs = dt.parse_tabs(text, _doc_default_tab_title({}))
-        if pulled_tabs:
-            pulled_tabs[-1]["content"] = gd.strip_sync_footer(pulled_tabs[-1]["content"])
-        next_content = dt.serialize_tabs(pulled_tabs, _doc_default_tab_title({}))
-
-        with project_worktree(project_id) as wt:
-            wt.commit_message = f"Smart-sync pull doc from Drive: {doc_id}"
-            path = wt / "docs" / f"{doc_id}.md"
-            if not path.exists():
-                raise HTTPException(404)
-            meta, _ = fm.read(path)
-            meta["papers"] = _extract_paper_refs(next_content)
-            meta["mentions"] = _extract_mentions(next_content)
-            fm.write(path, meta, next_content)
-
-        mapping.synced_at = datetime.now(timezone.utc)
-        session.add(mapping)
-        session.commit()
-        return {"direction": "pull", "ok": True}
-
-    else:
-        # Local is newer (or same) → push
-        try:
-            meta = _parse_doc(project_id, f"docs/{doc_id}.md")
-        except FileNotFoundError:
-            raise HTTPException(404)
-        content = meta.get("_body", "")
-        title = meta.get("title", doc_id)
-        tabs = meta.get("tabs") or dt.parse_tabs(content, _doc_default_tab_title(meta))
-        doc_folder = meta.get("folder", "")
-        project = session.get(Project, project_id)
-        try:
-            docs_service = gd.get_docs_service(token, str(current_user.id), session)
-            docs_root = gd.ensure_project_drive_child_folder(service, project_id, project.name, "Docs")
-            docs_folder = gd.get_or_create_folder(service, doc_folder, docs_root) if doc_folder else docs_root
-            result = gd.upsert_google_doc_tabs(service, docs_service, title, tabs, docs_folder,
-                                                existing_file_id=mapping.drive_file_id)
-        except Exception as exc:
-            raise HTTPException(502, f"Google Drive sync failed: {exc}")
-
-        mapping.drive_file_id = result["id"]
-        mapping.drive_link = result.get("webViewLink", "")
-        mapping.synced_at = datetime.now(timezone.utc)
-        session.add(mapping)
-        session.commit()
-        return {"direction": "push", "ok": True, "drive_link": result.get("webViewLink", "")}
+    try:
+        return drive_doc_sync.smart_sync_doc(
+            session,
+            token,
+            str(current_user.id),
+            project_id,
+            doc_id,
+        )
+    except FileNotFoundError:
+        raise HTTPException(404)
+    except Exception as exc:
+        operation = "doc.smart_sync"
+        if not mapping:
+            operation = "doc.smart_sync.initial_push"
+        raise _drive_http_exception(
+            operation,
+            exc,
+            project_id=project_id,
+            doc_id=doc_id,
+            drive_file_id=mapping.drive_file_id if mapping else "",
+        )
 
 
 @router.post("/sync-structure-from-drive")

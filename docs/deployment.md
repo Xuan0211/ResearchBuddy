@@ -60,6 +60,7 @@ ssh ubuntu@43.156.12.203 "sudo docker restart researchbuddy-nginx-1"
 | 路径 | 原因 |
 |---|---|
 | `backend/db.sqlite3` | 数据库 |
+| `backend/*.sqlite3*` | 数据库及手动备份 |
 | `backend/projects/` | 研究项目 git 仓库 |
 | `backend/images/` | 用户上传图片 |
 | `.env` / `.env.prod` | 生产环境密钥 |

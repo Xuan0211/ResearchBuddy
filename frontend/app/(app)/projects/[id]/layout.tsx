@@ -3,9 +3,12 @@ import Link from "next/link"
 import { useParams, usePathname } from "next/navigation"
 
 const TABS = [
+  { label: "Home", href: "home" },
   { label: "Papers", href: "papers" },
   { label: "Meetings", href: "meetings" },
   { label: "Docs", href: "docs" },
+  { label: "Writing", href: "writing" },
+  { label: "Skills", href: "skills" },
   { label: "Coding", href: "coding" },
   { label: "Workspace", href: "workspace" },
 ]

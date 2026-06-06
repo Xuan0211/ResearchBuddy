@@ -67,6 +67,54 @@ export interface DocumentTab {
   content: string
 }
 
+export interface ProjectSkill {
+  id: string
+  title: string
+  description: string
+  tags: string[]
+  path: string
+  readonly: boolean
+  content?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface SectionResourceDoc {
+  id: string
+  title: string
+  tags: string[]
+  path: string
+  content: string
+  metadata?: Record<string, unknown>
+}
+
+export interface SectionResources {
+  section: string
+  docs: SectionResourceDoc[]
+  skills: ProjectSkill[]
+  skill_ids: string[]
+  local_root: string
+}
+
+export interface GanttItem {
+  id: string; title: string; start: string; end: string
+  doc_id?: string; mentions?: string[]; note?: string
+}
+export interface GanttTrack { id: string; name: string; color: string; items: GanttItem[] }
+export interface GanttMilestone { id: string; title: string; date: string; color: string }
+export interface GanttData { tracks: GanttTrack[]; milestones: GanttMilestone[] }
+
+export interface WritingProject {
+  id: string; title: string; description: string
+  github_url: string; overleaf_url: string; files?: string[]
+}
+
+export interface MeetingSettings {
+  default_location: string
+  recurring_weekday: number | null
+  recurring_time: string
+  recurring_duration_minutes: number
+}
+
 export interface CodebookCriterion {
   id: string
   text: string

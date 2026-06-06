@@ -31,6 +31,7 @@ CONTENT_DIRS = {
     "assets": "Images, PDFs, datasets, and other binary assets",
     "team": "Shared contacts, roles, and collaboration metadata",
     "skills": "Reusable agent/team playbooks and local skills",
+    "section-resources": "Section-scoped docs and skill attachments",
 }
 
 DEFAULT_MANIFEST: dict[str, Any] = {
@@ -38,7 +39,7 @@ DEFAULT_MANIFEST: dict[str, Any] = {
     "version": WORKSPACE_VERSION,
     "source_of_truth": "git-workspace",
     "agent_contract": {
-        "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills"],
+        "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "section-resources"],
         "system_owned": [SYSTEM_DIR],
         "content_format": "markdown-with-yaml-frontmatter",
         "citation_syntax": "[[paper_id]]",
@@ -56,6 +57,10 @@ DEFAULT_MANIFEST: dict[str, Any] = {
         "team_skills": {
             "root": "skills",
             "preferred": ["markdown", "codex-skill"],
+        },
+        "section_resources": {
+            "root": "section-resources",
+            "preferred": ["markdown", "json"],
         },
     },
     "sync": {
@@ -97,7 +102,16 @@ def ensure_workspace(project_id: str, project_name: str = "") -> dict[str, Any]:
         wt.commit_message = "Ensure ResearchBuddy workspace"
         root = Path(wt.__fspath__())
 
-        for rel_dir in [*CONTENT_DIRS.keys(), SYSTEM_DIR, "assets/images", "assets/pdfs"]:
+        for rel_dir in [
+            *CONTENT_DIRS.keys(),
+            SYSTEM_DIR,
+            "assets/images",
+            "assets/pdfs",
+            "section-resources/papers/docs",
+            "section-resources/meetings/docs",
+            "section-resources/coding/docs",
+            "section-resources/workspace/docs",
+        ]:
             path = root / rel_dir
             path.mkdir(parents=True, exist_ok=True)
             keep = path / ".gitkeep"

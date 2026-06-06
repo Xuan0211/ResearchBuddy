@@ -3,7 +3,7 @@
   "version": "0.1",
   "source_of_truth": "git-workspace",
   "agent_contract": {
-    "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills"],
+    "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "section-resources"],
     "system_owned": [".researchbuddy"],
     "content_format": "markdown-with-yaml-frontmatter",
     "citation_syntax": "[[paper_id]]"
@@ -16,7 +16,8 @@
     "writing": "Paper-writing workspace, including LaTeX projects",
     "assets": "Images, PDFs, datasets, and other binary assets",
     "team": "Shared contacts, roles, and collaboration metadata",
-    "skills": "Reusable agent/team playbooks and local skills"
+    "skills": "Reusable agent/team playbooks and local skills",
+    "section-resources": "Section-scoped docs and skill attachments"
   },
   "extensions": {
     "paper_writing": {
@@ -30,6 +31,10 @@
     "team_skills": {
       "root": "skills",
       "preferred": ["markdown", "codex-skill"]
+    },
+    "section_resources": {
+      "root": "section-resources",
+      "preferred": ["markdown", "json"]
     }
   },
   "sync": {

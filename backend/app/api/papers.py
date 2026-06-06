@@ -2,6 +2,7 @@ import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from ..core.config import settings
@@ -522,3 +523,123 @@ async def sync_notes_to_drive(
         ))
     session.commit()
     return {"ok": True, "drive_link": result.get("webViewLink", "")}
+
+
+# ── AI-generated papers ───────────────────────────────────────────────────────
+
+def _parse_bibtex_entries(bib_text: str) -> list[dict]:
+    """Very simple BibTeX parser — extracts key, title, author, year."""
+    entries: list[dict] = []
+    for entry_match in re.finditer(r"@\w+\{([^,]+),(.*?)\n\}", bib_text, re.DOTALL):
+        key = entry_match.group(1).strip()
+        body = entry_match.group(2)
+        def _field(name: str) -> str:
+            m = re.search(rf"{name}\s*=\s*[{{\"](.*?)[}}\"]", body, re.IGNORECASE | re.DOTALL)
+            return " ".join((m.group(1) if m else "").split())
+        entries.append({
+            "key": key,
+            "title": _field("title"),
+            "author": _field("author"),
+            "year": _field("year"),
+        })
+    return entries
+
+
+@router.get("/ai-generated")
+def list_ai_papers(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    writing_paths = list_project_dir(project_id, "writing")
+    all_entries: list[dict] = []
+    seen_writing_dirs: set[str] = set()
+    for p in writing_paths:
+        parts = p.split("/")
+        if len(parts) < 2:
+            continue
+        writing_id = parts[1]
+        if writing_id in seen_writing_dirs:
+            continue
+        if not p.endswith("ai-generated.bib"):
+            continue
+        seen_writing_dirs.add(writing_id)
+        try:
+            bib_text = read_project_file(project_id, p)
+            entries = _parse_bibtex_entries(bib_text)
+            for e in entries:
+                e["writing_id"] = writing_id
+                e["bib_path"] = p
+            all_entries.extend(entries)
+        except Exception:
+            continue
+    return all_entries
+
+
+class AIBibAddIn(BaseModel):
+    bibtex: str
+    writing_id: str
+
+
+@router.post("/ai-generated", status_code=201)
+def add_ai_paper(
+    project_id: str,
+    body: AIBibAddIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    bib_path = f"writing/{body.writing_id}/ai-generated.bib"
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Add AI-generated reference"
+        path = wt / bib_path
+        if not path.exists():
+            raise HTTPException(404, f"ai-generated.bib not found in writing/{body.writing_id}")
+        existing = path.read_text(encoding="utf-8")
+        path.write_text(existing.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
+    return {"ok": True}
+
+
+class AIConfirmIn(BaseModel):
+    writing_id: str
+    key: str
+
+
+@router.post("/ai-generated/confirm")
+def confirm_ai_paper(
+    project_id: str,
+    body: AIConfirmIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Move a BibTeX entry from ai-generated.bib to reference.bib (local confirmation).
+    Full Zotero sync must be done separately via the Zotero integration."""
+    check_member(project_id, current_user, session, min_role="member")
+    ai_path = f"writing/{body.writing_id}/ai-generated.bib"
+    ref_path = f"writing/{body.writing_id}/reference.bib"
+
+    try:
+        ai_text = read_project_file(project_id, ai_path)
+        ref_text = read_project_file(project_id, ref_path)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    # Find and extract the entry
+    pattern = re.compile(
+        rf"(@\w+\{{{re.escape(body.key)},.*?\n\}})", re.DOTALL
+    )
+    m = pattern.search(ai_text)
+    if not m:
+        raise HTTPException(404, f"Key '{body.key}' not found in ai-generated.bib")
+
+    entry_text = m.group(1)
+    new_ai_text = pattern.sub("", ai_text).strip() + "\n"
+    new_ref_text = ref_text.rstrip() + f"\n\n% Confirmed from AI references\n{entry_text}\n"
+
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Confirm AI reference: {body.key}"
+        (wt / ai_path).write_text(new_ai_text, encoding="utf-8")
+        (wt / ref_path).write_text(new_ref_text, encoding="utf-8")
+
+    return {"ok": True, "key": body.key}

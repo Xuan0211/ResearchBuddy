@@ -2,9 +2,10 @@
 import base64
 import html
 import json
+import logging
 import re
 from datetime import datetime, timezone
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 import requests as _requests
 from cryptography.fernet import Fernet
@@ -18,6 +19,8 @@ from ..core.config import settings
 from ..models import GoogleDriveToken
 from .project_fs import project_worktree, read_project_file
 
+logger = logging.getLogger(__name__)
+
 SCOPES = [
     "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/documents",
@@ -26,6 +29,15 @@ DRIVE_SETTINGS_PATH = ".researchbuddy/drive-settings.json"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 _AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+class GoogleDocsApiError(Exception):
+    """Small HttpError-like wrapper for raw Docs REST calls."""
+
+    def __init__(self, status: int, reason: str, content: bytes):
+        super().__init__(content.decode("utf-8", errors="replace") or reason)
+        self.resp = type("Response", (), {"status": status, "reason": reason})()
+        self.content = content
 
 
 def _fernet() -> Fernet:
@@ -313,6 +325,7 @@ def extract_file_id(value: str) -> str:
 SYNC_FOOTER = "\n\n---\n_Synced by ResearchBuddy_"
 _SYNC_FOOTER_STRIP = "---\n_Synced by ResearchBuddy_"
 _IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_IMG_PLACEHOLDER_RE = re.compile(r"\[image:\s*([^\]|]*)\s*\|\s*([^\]]+)\]")
 
 
 def strip_sync_footer(text: str) -> str:
@@ -325,7 +338,24 @@ def strip_sync_footer(text: str) -> str:
     return stripped
 
 
-def markdown_to_google_doc_html(title: str, markdown: str) -> str:
+def image_placeholder_to_markdown(text: str) -> str:
+    """Restore ResearchBuddy image placeholders that preserve their original src."""
+    def repl(match: re.Match[str]) -> str:
+        alt = (match.group(1) or "image").strip()
+        src = (match.group(2) or "").strip()
+        return f"![{alt}]({src})" if src else f"[image: {alt}]"
+
+    return _IMG_PLACEHOLDER_RE.sub(repl, text or "")
+
+
+def markdown_image_placeholder(match: re.Match[str]) -> str:
+    """Represent markdown images as text while keeping enough data to restore locally."""
+    alt = (match.group(1) or "image").strip()
+    src = (match.group(2) or "").strip()
+    return f"[image: {alt} | {src}]" if src else f"[image: {alt}]"
+
+
+def markdown_to_google_doc_html(title: str, markdown: str, add_footer: bool = True) -> str:
     """Small, predictable Markdown-to-HTML converter for Google Docs import."""
     body_lines = []
     in_ul = False
@@ -385,7 +415,7 @@ def markdown_to_google_doc_html(title: str, markdown: str) -> str:
     if in_ul:
         body_lines.append("</ul>")
 
-    footer = "<hr><p><em>Synced by ResearchBuddy</em></p>"
+    footer = "<hr><p><em>Synced by ResearchBuddy</em></p>" if add_footer else ""
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>{html.escape(title)}</title></head><body>"
@@ -399,10 +429,11 @@ def upsert_google_doc(
     markdown: str,
     folder_id: str,
     existing_file_id: str | None = None,
+    add_footer: bool = True,
 ) -> dict:
     """Create or replace content in a Google Docs document using HTML import."""
     media = MediaInMemoryUpload(
-        markdown_to_google_doc_html(title, markdown).encode("utf-8"),
+        markdown_to_google_doc_html(title, markdown, add_footer=add_footer).encode("utf-8"),
         mimetype="text/html",
         resumable=False,
     )
@@ -444,13 +475,108 @@ def _tab_end_index(tab: dict) -> int:
     return int(content[-1].get("endIndex") or 1)
 
 
+def _docs_rest_json(
+    docs_service,
+    path: str,
+    method: str = "GET",
+    query: dict[str, str] | None = None,
+    body: dict | None = None,
+) -> dict:
+    """Call Docs REST directly when google-api-python-client discovery is stale."""
+    http = getattr(docs_service, "_http", None)
+    if http is None:
+        raise RuntimeError("Google Docs service does not expose an authorized HTTP client")
+
+    url = f"https://docs.googleapis.com/v1/{path.lstrip('/')}"
+    if query:
+        url = f"{url}?{urlencode(query)}"
+
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Content-Type": "application/json"} if body is not None else {}
+    resp, content = http.request(url, method=method, body=payload, headers=headers)
+    resp_get = resp.get if hasattr(resp, "get") else lambda _key, default=None: default
+    status = int(getattr(resp, "status", 0) or resp_get("status", 0) or 0)
+    reason = str(getattr(resp, "reason", "") or resp_get("reason", ""))
+    content_bytes = content if isinstance(content, bytes) else str(content or "").encode("utf-8")
+    if status >= 400:
+        raise GoogleDocsApiError(status, reason, content_bytes)
+    if not content_bytes:
+        return {}
+    return json.loads(content_bytes.decode("utf-8"))
+
+
+def _get_google_doc(docs_service, document_id: str, include_tabs: bool = True) -> dict:
+    """Fetch a Google Doc with real tab content, bypassing stale discovery docs."""
+    if include_tabs:
+        try:
+            return docs_service.documents().get(
+                documentId=document_id,
+                includeTabsContent=True,
+            ).execute()
+        except TypeError as exc:
+            if "includeTabsContent" not in str(exc):
+                raise
+            logger.info(
+                "Google Docs discovery lacks includeTabsContent; using raw REST tabs fetch",
+                extra={"document_id": document_id},
+            )
+            return _docs_rest_json(
+                docs_service,
+                f"documents/{quote(document_id, safe='')}",
+                query={"includeTabsContent": "true"},
+            )
+    return docs_service.documents().get(documentId=document_id).execute()
+
+
+def _batch_update_google_doc(docs_service, document_id: str, requests: list[dict]) -> dict:
+    """Apply Docs batchUpdate through raw REST so tab requests are supported."""
+    return _docs_rest_json(
+        docs_service,
+        f"documents/{quote(document_id, safe='')}:batchUpdate",
+        method="POST",
+        body={"requests": requests},
+    )
+
+
 def _plain_tab_text(markdown: str, add_footer: bool = False) -> str:
     text = strip_sync_footer((markdown or "").strip())
-    # Replace markdown images with a short placeholder — insertText can't embed images
-    text = _IMG_MD_RE.sub(lambda m: f"[📷 {m.group(1) or 'image'}]", text)
+    # Replace markdown images with a restorable placeholder — insertText can't embed images.
+    text = _IMG_MD_RE.sub(markdown_image_placeholder, text)
     if add_footer:
         return f"{text}{SYNC_FOOTER}\n" if text else f"{SYNC_FOOTER}\n"
     return f"{text}\n" if text else "\n"
+
+
+def _tabs_as_sync_markdown(tabs: list[dict]) -> str:
+    """Flatten tabs into ResearchBuddy tab markers for reliable round-trips."""
+    from .document_tabs import serialize_tabs
+
+    prepared: list[dict] = []
+    last_idx = len(tabs) - 1
+    for idx, tab in enumerate(tabs):
+        content = strip_sync_footer((tab.get("content") or "").strip())
+        content = _IMG_MD_RE.sub(markdown_image_placeholder, content)
+        if idx == last_idx:
+            content = f"{content}{SYNC_FOOTER}" if content else SYNC_FOOTER
+        prepared.append({**tab, "content": content})
+    return serialize_tabs(prepared, "Main")
+
+
+def _fallback_upsert_google_doc_tabs(
+    drive_service,
+    title: str,
+    normalized_tabs: list[dict],
+    folder_id: str,
+    existing_file_id: str | None,
+) -> dict:
+    return upsert_google_doc(
+        drive_service,
+        title,
+        _tabs_as_sync_markdown(normalized_tabs),
+        folder_id,
+        existing_file_id=existing_file_id,
+        add_footer=False,
+    )
 
 
 def upsert_google_doc_tabs(
@@ -481,86 +607,87 @@ def upsert_google_doc_tabs(
             fields="id",
         ).execute()
 
-    doc = docs_service.documents().get(
-        documentId=document_id,
-        includeTabsContent=True,
-    ).execute()
+    doc = _get_google_doc(docs_service, document_id, include_tabs=True)
     existing_tabs = _flatten_doc_tabs(doc.get("tabs") or [])
     has_tabs_feature = bool(existing_tabs)
 
     if has_tabs_feature:
         # ── Tabs-aware path ──────────────────────────────────────────────────
-        setup_requests: list[dict] = []
-        first_id = _tab_id(existing_tabs[0])
-        setup_requests.append({
-            "updateDocumentTabProperties": {
-                "tabProperties": {
-                    "tabId": first_id,
-                    "title": normalized[0]["title"],
-                    "index": 0,
-                },
-                "fields": "title,index",
-            }
-        })
-        for idx, tab in enumerate(normalized[1:], start=1):
-            if idx < len(existing_tabs):
-                setup_requests.append({
-                    "updateDocumentTabProperties": {
-                        "tabProperties": {
-                            "tabId": _tab_id(existing_tabs[idx]),
-                            "title": tab["title"],
-                            "index": idx,
-                        },
-                        "fields": "title,index",
-                    }
-                })
-            else:
-                setup_requests.append({
-                    "addDocumentTab": {
-                        "tabProperties": {
-                            "title": tab["title"],
-                            "index": idx,
-                        }
-                    }
-                })
-        if setup_requests:
-            docs_service.documents().batchUpdate(
-                documentId=document_id,
-                body={"requests": setup_requests},
-            ).execute()
-
-        doc = docs_service.documents().get(
-            documentId=document_id,
-            includeTabsContent=True,
-        ).execute()
-        target_tabs = _flatten_doc_tabs(doc.get("tabs") or [])[:len(normalized)]
-
-        content_requests: list[dict] = []
-        last_idx = len(normalized) - 1
-        for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
-            tab_id = _tab_id(tab)
-            end_index = _tab_end_index(tab)
-            if end_index > 2:
-                content_requests.append({
-                    "deleteContentRange": {
-                        "range": {
-                            "startIndex": 1,
-                            "endIndex": end_index - 1,
-                            "tabId": tab_id,
-                        }
-                    }
-                })
-            content_requests.append({
-                "insertText": {
-                    "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
-                    "endOfSegmentLocation": {"tabId": tab_id},
+        try:
+            setup_requests: list[dict] = []
+            first_id = _tab_id(existing_tabs[0])
+            setup_requests.append({
+                "updateDocumentTabProperties": {
+                    "tabProperties": {
+                        "tabId": first_id,
+                        "title": normalized[0]["title"],
+                        "index": 0,
+                    },
+                    "fields": "title,index",
                 }
             })
-        if content_requests:
-            docs_service.documents().batchUpdate(
-                documentId=document_id,
-                body={"requests": content_requests},
-            ).execute()
+            for idx, tab in enumerate(normalized[1:], start=1):
+                if idx < len(existing_tabs):
+                    setup_requests.append({
+                        "updateDocumentTabProperties": {
+                            "tabProperties": {
+                                "tabId": _tab_id(existing_tabs[idx]),
+                                "title": tab["title"],
+                                "index": idx,
+                            },
+                            "fields": "title,index",
+                        }
+                    })
+                else:
+                    setup_requests.append({
+                        "addDocumentTab": {
+                            "tabProperties": {
+                                "title": tab["title"],
+                                "index": idx,
+                            }
+                        }
+            })
+            if setup_requests:
+                _batch_update_google_doc(docs_service, document_id, setup_requests)
+
+            doc = _get_google_doc(docs_service, document_id, include_tabs=True)
+            target_tabs = _flatten_doc_tabs(doc.get("tabs") or [])[:len(normalized)]
+
+            content_requests: list[dict] = []
+            last_idx = len(normalized) - 1
+            for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
+                tab_id = _tab_id(tab)
+                end_index = _tab_end_index(tab)
+                if end_index > 2:
+                    content_requests.append({
+                        "deleteContentRange": {
+                            "range": {
+                                "startIndex": 1,
+                                "endIndex": end_index - 1,
+                                "tabId": tab_id,
+                            }
+                        }
+                    })
+                content_requests.append({
+                    "insertText": {
+                        "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
+                        "endOfSegmentLocation": {"tabId": tab_id},
+                    }
+                })
+            if content_requests:
+                _batch_update_google_doc(docs_service, document_id, content_requests)
+        except Exception:
+            logger.exception(
+                "Google Docs tabs API sync failed; falling back to single-body tab markers",
+                extra={"document_id": document_id},
+            )
+            return _fallback_upsert_google_doc_tabs(
+                drive_service,
+                title,
+                normalized,
+                folder_id,
+                document_id,
+            )
 
     else:
         # ── Fallback: no Tabs feature — write all content to main body ───────
@@ -573,23 +700,14 @@ def upsert_google_doc_tabs(
                     "range": {"startIndex": 1, "endIndex": end_index - 1}
                 }
             })
-        # Merge all ResearchBuddy tabs into one text block with separators
-        parts: list[str] = []
-        for i, tab_def in enumerate(normalized):
-            if len(normalized) > 1:
-                parts.append(f"=== {tab_def['title']} ===\n\n")
-            parts.append(_plain_tab_text(tab_def["content"], add_footer=(i == len(normalized) - 1)))
         body_requests.append({
             "insertText": {
-                "text": "".join(parts),
+                "text": _tabs_as_sync_markdown(normalized),
                 "endOfSegmentLocation": {"segmentId": ""},
             }
         })
         if body_requests:
-            docs_service.documents().batchUpdate(
-                documentId=document_id,
-                body={"requests": body_requests},
-            ).execute()
+            _batch_update_google_doc(docs_service, document_id, body_requests)
 
     file = drive_service.files().get(
         fileId=document_id,
@@ -620,16 +738,13 @@ def _structural_elements_to_text(elements: list[dict]) -> str:
         text = text.rstrip("\n")
         if text:
             chunks.append(text)
-    return "\n\n".join(chunks).strip()
+    return image_placeholder_to_markdown("\n\n".join(chunks).strip())
 
 
 def export_google_doc_tabs_markdown(docs_service, file_id: str) -> tuple[str, list[str]]:
     from .document_tabs import serialize_tabs
 
-    doc = docs_service.documents().get(
-        documentId=file_id,
-        includeTabsContent=True,
-    ).execute()
+    doc = _get_google_doc(docs_service, file_id, include_tabs=True)
     tabs = doc.get("tabs") or []
     if not tabs:
         body = doc.get("body", {})
