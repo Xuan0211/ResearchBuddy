@@ -486,80 +486,110 @@ def upsert_google_doc_tabs(
         includeTabsContent=True,
     ).execute()
     existing_tabs = _flatten_doc_tabs(doc.get("tabs") or [])
-    if not existing_tabs:
-        raise ValueError("Google Doc has no editable tabs")
+    has_tabs_feature = bool(existing_tabs)
 
-    setup_requests: list[dict] = []
-    first_id = _tab_id(existing_tabs[0])
-    setup_requests.append({
-        "updateDocumentTabProperties": {
-            "tabProperties": {
-                "tabId": first_id,
-                "title": normalized[0]["title"],
-                "index": 0,
-            },
-            "fields": "title,index",
-        }
-    })
-    for idx, tab in enumerate(normalized[1:], start=1):
-        if idx < len(existing_tabs):
-            setup_requests.append({
-                "updateDocumentTabProperties": {
-                    "tabProperties": {
-                        "tabId": _tab_id(existing_tabs[idx]),
-                        "title": tab["title"],
-                        "index": idx,
-                    },
-                    "fields": "title,index",
-                }
-            })
-        else:
-            setup_requests.append({
-                "addDocumentTab": {
-                    "tabProperties": {
-                        "title": tab["title"],
-                        "index": idx,
-                    }
-                }
-            })
-    if setup_requests:
-        docs_service.documents().batchUpdate(
-            documentId=document_id,
-            body={"requests": setup_requests},
-        ).execute()
-
-    doc = docs_service.documents().get(
-        documentId=document_id,
-        includeTabsContent=True,
-    ).execute()
-    target_tabs = _flatten_doc_tabs(doc.get("tabs") or [])[:len(normalized)]
-
-    content_requests: list[dict] = []
-    last_idx = len(normalized) - 1
-    for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
-        tab_id = _tab_id(tab)
-        end_index = _tab_end_index(tab)
-        if end_index > 2:
-            content_requests.append({
-                "deleteContentRange": {
-                    "range": {
-                        "startIndex": 1,
-                        "endIndex": end_index - 1,
-                        "tabId": tab_id,
-                    }
-                }
-            })
-        content_requests.append({
-            "insertText": {
-                "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
-                "endOfSegmentLocation": {"tabId": tab_id},
+    if has_tabs_feature:
+        # ── Tabs-aware path ──────────────────────────────────────────────────
+        setup_requests: list[dict] = []
+        first_id = _tab_id(existing_tabs[0])
+        setup_requests.append({
+            "updateDocumentTabProperties": {
+                "tabProperties": {
+                    "tabId": first_id,
+                    "title": normalized[0]["title"],
+                    "index": 0,
+                },
+                "fields": "title,index",
             }
         })
-    if content_requests:
-        docs_service.documents().batchUpdate(
+        for idx, tab in enumerate(normalized[1:], start=1):
+            if idx < len(existing_tabs):
+                setup_requests.append({
+                    "updateDocumentTabProperties": {
+                        "tabProperties": {
+                            "tabId": _tab_id(existing_tabs[idx]),
+                            "title": tab["title"],
+                            "index": idx,
+                        },
+                        "fields": "title,index",
+                    }
+                })
+            else:
+                setup_requests.append({
+                    "addDocumentTab": {
+                        "tabProperties": {
+                            "title": tab["title"],
+                            "index": idx,
+                        }
+                    }
+                })
+        if setup_requests:
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": setup_requests},
+            ).execute()
+
+        doc = docs_service.documents().get(
             documentId=document_id,
-            body={"requests": content_requests},
+            includeTabsContent=True,
         ).execute()
+        target_tabs = _flatten_doc_tabs(doc.get("tabs") or [])[:len(normalized)]
+
+        content_requests: list[dict] = []
+        last_idx = len(normalized) - 1
+        for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
+            tab_id = _tab_id(tab)
+            end_index = _tab_end_index(tab)
+            if end_index > 2:
+                content_requests.append({
+                    "deleteContentRange": {
+                        "range": {
+                            "startIndex": 1,
+                            "endIndex": end_index - 1,
+                            "tabId": tab_id,
+                        }
+                    }
+                })
+            content_requests.append({
+                "insertText": {
+                    "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
+                    "endOfSegmentLocation": {"tabId": tab_id},
+                }
+            })
+        if content_requests:
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": content_requests},
+            ).execute()
+
+    else:
+        # ── Fallback: no Tabs feature — write all content to main body ───────
+        body_content = doc.get("body", {}).get("content", [])
+        end_index = int(body_content[-1].get("endIndex", 1)) if body_content else 1
+        body_requests: list[dict] = []
+        if end_index > 2:
+            body_requests.append({
+                "deleteContentRange": {
+                    "range": {"startIndex": 1, "endIndex": end_index - 1}
+                }
+            })
+        # Merge all ResearchBuddy tabs into one text block with separators
+        parts: list[str] = []
+        for i, tab_def in enumerate(normalized):
+            if len(normalized) > 1:
+                parts.append(f"=== {tab_def['title']} ===\n\n")
+            parts.append(_plain_tab_text(tab_def["content"], add_footer=(i == len(normalized) - 1)))
+        body_requests.append({
+            "insertText": {
+                "text": "".join(parts),
+                "endOfSegmentLocation": {"segmentId": ""},
+            }
+        })
+        if body_requests:
+            docs_service.documents().batchUpdate(
+                documentId=document_id,
+                body={"requests": body_requests},
+            ).execute()
 
     file = drive_service.files().get(
         fileId=document_id,
