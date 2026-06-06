@@ -32,12 +32,15 @@ def project_worktree(project_id: str):
     tmp = settings.projects_dir / f"{project_id}_wt_tmp"
     try:
         repo = git.Repo.clone_from(str(bare), str(tmp))
+        with repo.config_writer() as cw:
+            cw.set_value("user", "name", "ResearchBuddy")
+            cw.set_value("user", "email", "bot@researchbuddy")
         wt = _Worktree(tmp, repo)
         yield wt
         repo.git.add(A=True)
         if repo.is_dirty(untracked_files=True):
             repo.git.commit("-m", wt.commit_message)
-            repo.remotes.origin.push()
+            repo.remotes.origin.push("HEAD:refs/heads/main")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

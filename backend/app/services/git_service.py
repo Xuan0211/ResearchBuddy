@@ -10,6 +10,8 @@ from ..core.config import settings
 def init_project_repo(project_id: str) -> Path:
     bare_path = settings.projects_dir / f"{project_id}.git"
     bare_repo = git.Repo.init(str(bare_path), bare=True)
+    # Point HEAD at main before any commits so the branch name is consistent
+    bare_repo.git.symbolic_ref("HEAD", "refs/heads/main")
 
     tmp_path = settings.projects_dir / f"{project_id}_init_tmp"
     try:

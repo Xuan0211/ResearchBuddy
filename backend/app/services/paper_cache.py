@@ -14,7 +14,11 @@ _cache: dict[str, tuple[str, list]] = {}  # project_id -> (sha, papers)
 def get_head_sha(project_id: str) -> str:
     bare = settings.projects_dir / f"{project_id}.git"
     repo = git.Repo(str(bare))
-    return repo.head.commit.hexsha
+    try:
+        return repo.head.commit.hexsha
+    except (ValueError, TypeError):
+        # Empty repo or HEAD points to a branch that doesn't exist yet
+        return ""
 
 
 def get(project_id: str) -> list | None:
