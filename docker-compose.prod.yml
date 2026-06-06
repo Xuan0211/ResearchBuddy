@@ -21,9 +21,9 @@ services:
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
       - GOOGLE_REDIRECT_URI=https://research.hopeyuanxu.com/api/auth/google-drive/callback
     volumes:
-      - ./backend/db.sqlite3:/app/db.sqlite3
-      - ./backend/projects:/app/projects
-      - ./backend/images:/app/images
+      - ./backend/db.sqlite3:/backend/db.sqlite3
+      - ./backend/projects:/backend/projects
+      - ./backend/images:/backend/images
     restart: unless-stopped
 
   frontend:
