@@ -69,12 +69,14 @@ async def info_refs(
     check_member(project_id, current_user, session, min_role=required_role)
 
     repo_path = get_repo_path(project_id)
+    # "git-upload-pack" → "git upload-pack" (strip the "git-" prefix)
+    git_cmd = service.removeprefix("git-")
     result = subprocess.run(
-        ["git", service, "--stateless-rpc", "--advertise-refs", str(repo_path)],
+        ["git", git_cmd, "--stateless-rpc", "--advertise-refs", str(repo_path)],
         capture_output=True,
     )
     if result.returncode != 0:
-        raise HTTPException(500)
+        raise HTTPException(500, result.stderr.decode())
 
     body = (_pkt_line(f"# service={service}\n") + "0000").encode() + result.stdout
     return Response(content=body, media_type=f"application/x-{service}-advertisement")
@@ -97,8 +99,9 @@ async def git_rpc(
 
     body = await request.body()
     repo_path = get_repo_path(project_id)
+    git_cmd = service.removeprefix("git-")
     result = subprocess.run(
-        ["git", service, "--stateless-rpc", str(repo_path)],
+        ["git", git_cmd, "--stateless-rpc", str(repo_path)],
         input=body,
         capture_output=True,
     )
