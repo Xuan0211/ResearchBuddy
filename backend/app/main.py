@@ -76,9 +76,44 @@ def health():
 
 @app.get("/api/help")
 def get_help():
+    """Return help index: list of docs + content of HOW_TO_USE file."""
     root = pathlib.Path(__file__).parent.parent.parent
+    docs_dir = root / "docs"
+
+    # Collect available docs
+    docs: list[dict] = []
+    if docs_dir.exists():
+        for md in sorted(docs_dir.glob("*.md")):
+            try:
+                import frontmatter as _fm
+                post = _fm.loads(md.read_text(encoding="utf-8"))
+                title = post.metadata.get("title") or md.stem.replace("-", " ").title()
+            except Exception:
+                title = md.stem.replace("-", " ").title()
+            docs.append({"name": md.stem, "title": title})
+
+    # Main help content
+    content = ""
     for name in ("HOW_TO_USE_RESEARCHBUDDY.md", "README.md"):
         p = root / name
         if p.exists():
-            return {"content": p.read_text(encoding="utf-8")}
-    return {"content": "# ResearchBuddy\n\nNo help file found."}
+            content = p.read_text(encoding="utf-8")
+            break
+
+    return {"content": content, "docs": docs}
+
+
+@app.get("/api/help/{doc_name}")
+def get_help_doc(doc_name: str):
+    """Return the content of a specific doc from the docs/ folder."""
+    root = pathlib.Path(__file__).parent.parent.parent
+    # Sanitise: only allow alphanumeric + hyphens/underscores
+    import re as _re
+    if not _re.fullmatch(r"[a-zA-Z0-9_-]+", doc_name):
+        from fastapi import HTTPException
+        raise HTTPException(400, "Invalid doc name")
+    p = root / "docs" / f"{doc_name}.md"
+    if not p.exists():
+        from fastapi import HTTPException
+        raise HTTPException(404, f"Doc '{doc_name}' not found")
+    return {"name": doc_name, "content": p.read_text(encoding="utf-8")}
