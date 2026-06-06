@@ -24,6 +24,7 @@ services:
       - ./backend/db.sqlite3:/backend/db.sqlite3
       - ./backend/projects:/backend/projects
       - ./backend/images:/backend/images
+      - ./docs:/docs:ro
     restart: unless-stopped
 
   frontend:
