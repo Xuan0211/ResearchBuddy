@@ -70,12 +70,25 @@ def check_member(project_id: str, user: User, session: Session, min_role: str = 
     return member
 
 
+def _get_last_edited_at(project_id: str):
+    """Return the datetime of the latest git commit, or None."""
+    try:
+        if not git_service.repo_exists(project_id):
+            return None
+        import git as _git
+        repo = _git.Repo(str(git_service.get_repo_path(project_id)))
+        return repo.head.commit.committed_datetime
+    except Exception:
+        return None
+
+
 def project_response(project: Project, role: str) -> dict:
     return {
         "id": str(project.id),
         "name": project.name,
         "description": project.description,
         "created_at": project.created_at,
+        "last_edited_at": _get_last_edited_at(str(project.id)),
         "role": role,
         "zotero_configured": bool(project.zotero_api_key),
         "zotero_last_sync": project.zotero_last_sync,
@@ -211,6 +224,31 @@ def create_project(
     session.commit()
     session.refresh(project)
     return project_response(project, "admin")
+
+
+@router.delete("/{project_id}", status_code=204)
+def delete_project(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="admin")
+
+    # Remove related rows
+    for row in session.exec(select(ProjectMember).where(ProjectMember.project_id == project_id)).all():
+        session.delete(row)
+    for row in session.exec(select(ProjectInvite).where(ProjectInvite.project_id == project_id)).all():
+        session.delete(row)
+    for row in session.exec(select(DriveFileMapping).where(DriveFileMapping.project_id == project_id)).all():
+        session.delete(row)
+
+    # Delete git repo from filesystem
+    git_service.delete_project_repo(project_id)
+
+    project = session.get(Project, project_id)
+    if project:
+        session.delete(project)
+    session.commit()
 
 
 @router.get("/{project_id}")

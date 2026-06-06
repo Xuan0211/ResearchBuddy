@@ -3,6 +3,7 @@ export interface Project {
   name: string
   description: string
   created_at: string
+  last_edited_at: string | null
   role: "admin" | "member" | "viewer"
   zotero_configured: boolean
   zotero_last_sync: string | null
