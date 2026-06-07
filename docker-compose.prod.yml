@@ -25,6 +25,7 @@ services:
       - ./backend/projects:/backend/projects
       - ./backend/images:/backend/images
       - ./docs:/docs:ro
+      - ./project-template:/project-template:ro
     restart: unless-stopped
 
   frontend:

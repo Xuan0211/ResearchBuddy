@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ExternalLink, FileCode, GitBranch, Plus, X } from "lucide-react"
 import { api } from "@/lib/api"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 interface WritingProject {
   id: string; title: string; description: string
@@ -178,6 +179,8 @@ export default function WritingPage() {
                       </button>
                     </div>
                   )}
+
+                  <SectionResourcesPanel projectId={projectId} section="writing" title="Writing skills & docs" />
 
                   <div className="p-4 bg-gray-50 rounded-xl text-xs text-gray-500 space-y-1">
                     <p className="font-medium text-gray-700">AI writing guidelines</p>

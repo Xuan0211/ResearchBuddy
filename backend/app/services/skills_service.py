@@ -75,6 +75,22 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
     return result
 
 
+def _build_attachment_map(project_id: str) -> dict[str, list[str]]:
+    """Return {skill_id: [section, ...]} from all section-resources/*/skills.json."""
+    import json
+    ALL_SECTIONS = ["papers", "meetings", "coding", "workspace", "writing", "docs"]
+    attachment: dict[str, list[str]] = {}
+    for section in ALL_SECTIONS:
+        try:
+            raw = read_project_file(project_id, f"section-resources/{section}/skills.json")
+            data = json.loads(raw)
+            for sid in data.get("skills", []):
+                attachment.setdefault(str(sid), []).append(section)
+        except Exception:
+            pass
+    return attachment
+
+
 def list_skills(project_id: str) -> list[dict[str, Any]]:
     skills: dict[str, dict[str, Any]] = {}
     for path in list_project_dir(project_id, SKILLS_ROOT):
@@ -87,6 +103,17 @@ def list_skills(project_id: str) -> list[dict[str, Any]]:
         existing = skills.get(skill["id"])
         if not existing or path.endswith("/SKILL.md"):
             skills[skill["id"]] = skill
+
+    # Annotate each skill with the sections it's actually attached to
+    attachment_map = _build_attachment_map(project_id)
+    for sid, skill in skills.items():
+        attached = attachment_map.get(sid, [])
+        # Merge frontmatter `sections` hint with actual json attachments
+        fm_sections: list = skill.get("sections") or []
+        merged = list(dict.fromkeys(attached + fm_sections))  # attached first, deduplicated
+        skill["sections"] = merged
+        skill["attached_sections"] = attached
+
     return sorted(skills.values(), key=lambda item: item["title"].lower())
 
 

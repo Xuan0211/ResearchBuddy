@@ -321,12 +321,24 @@ export default function SkillsPage() {
                     <Trash2 size={11} />
                   </button>
                 </div>
+                {/* Tags */}
                 {skill.tags?.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {skill.tags.map(tag => (
                       <span key={tag}
                         className={`px-1.5 py-0 rounded text-[10px] ${selected?.id === skill.id ? "bg-white/20 text-white" : "bg-gray-100 text-gray-500"}`}>
                         {tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {/* Attached sections */}
+                {((skill as any).attached_sections?.length > 0) && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {((skill as any).attached_sections as string[]).map(sec => (
+                      <span key={sec}
+                        className={`px-1.5 py-0 rounded-full text-[10px] font-medium ${selected?.id === skill.id ? "bg-white/30 text-white" : "bg-blue-50 text-blue-600"}`}>
+                        {SECTION_LABELS[sec] ?? sec}
                       </span>
                     ))}
                   </div>
@@ -340,7 +352,7 @@ export default function SkillsPage() {
       {/* ── Right panel: detail / create ── */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {creating ? (
-          <div className="flex-1 overflow-y-auto p-6 max-w-2xl">
+          <div className="flex-1 overflow-y-auto p-6 max-w-3xl">
             <div className="flex items-center justify-between mb-5">
               <h3 className="font-semibold text-sm">New Skill</h3>
               <button onClick={() => setCreating(false)} className="text-gray-400 hover:text-black"><X size={16} /></button>
@@ -441,7 +453,7 @@ export default function SkillsPage() {
                   spellCheck={false}
                 />
               ) : (
-                <div className="px-8 py-6 max-w-3xl prose prose-sm prose-gray max-w-none">
+                <div className="px-8 py-6 prose prose-sm max-w-none">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>
                 </div>
               )}

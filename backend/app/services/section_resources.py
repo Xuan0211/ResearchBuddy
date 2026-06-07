@@ -13,7 +13,7 @@ from .project_fs import list_project_dir, project_worktree, read_project_file
 from .skills_service import get_skill, list_skills, slugify
 
 RESOURCES_ROOT = "section-resources"
-ALLOWED_SECTIONS = {"papers", "meetings", "coding", "workspace"}
+ALLOWED_SECTIONS = {"papers", "meetings", "coding", "workspace", "writing", "docs"}
 
 
 def _check_section(section: str) -> str:
