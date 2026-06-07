@@ -10,7 +10,7 @@ export default function ImagesPage() {
       <div>
         <h2 className="text-base font-semibold">Images</h2>
       </div>
-      <SectionResourcesPanel projectId={projectId} section="images" title="Image resources" preferredLinkKind="figma" />
+      <SectionResourcesPanel projectId={projectId} section="images" title="Image docs & skills" />
     </div>
   )
 }

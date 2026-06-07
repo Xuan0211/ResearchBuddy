@@ -145,6 +145,13 @@ export default function WritingPage() {
                     ))}
                   </>
                 )}
+                <SectionResourcesPanel
+                  projectId={projectId}
+                  section="writing"
+                  scope={selected.id}
+                  title="Docs & skills"
+                  compact
+                />
               </div>
             </div>
 
@@ -200,13 +207,6 @@ export default function WritingPage() {
                       </button>
                     </div>
                   )}
-
-                  <SectionResourcesPanel
-                    projectId={projectId}
-                    section="writing"
-                    scope={selected.id}
-                    title="Writing resources"
-                  />
 
                   <div className="p-4 bg-gray-50 rounded-xl text-xs text-gray-500 space-y-1">
                     <p className="font-medium text-gray-700">AI writing guidelines</p>
