@@ -6,7 +6,7 @@ import type { ProjectSkill, SectionResourceDoc, SectionResources } from "@/lib/t
 
 type Props = {
   projectId: string
-  section: "papers" | "meetings" | "coding" | "workspace"
+  section: "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs"
   title?: string
 }
 
