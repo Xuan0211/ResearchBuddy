@@ -78,25 +78,54 @@ def health():
     return {"status": "ok", "app": settings.app_name}
 
 
+def _scan_docs_tree(directory: pathlib.Path, base: pathlib.Path) -> list[dict]:
+    """Recursively scan docs/ and return a nested tree of {type, name, title, path, children}."""
+    import frontmatter as _fm
+    items: list[dict] = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda p: (p.is_dir(), p.name))
+    except PermissionError:
+        return []
+    for entry in entries:
+        rel = entry.relative_to(base)
+        if entry.is_dir():
+            children = _scan_docs_tree(entry, base)
+            if children:
+                items.append({
+                    "type": "dir",
+                    "name": entry.name,
+                    "title": entry.name.replace("-", " ").title(),
+                    "path": str(rel),
+                    "children": children,
+                })
+        elif entry.suffix == ".md":
+            try:
+                post = _fm.loads(entry.read_text(encoding="utf-8"))
+                title = post.metadata.get("title") or entry.stem.replace("-", " ").title()
+            except Exception:
+                title = entry.stem.replace("-", " ").title()
+            doc_path = str(rel)[:-3]  # strip .md
+            items.append({"type": "doc", "name": entry.stem, "title": title, "path": doc_path})
+    return items
+
+
 @app.get("/api/help")
 def get_help():
-    """Return help index: list of docs + content of HOW_TO_USE file."""
+    """Return help index: nested doc tree + content of HOW_TO_USE file."""
     root = pathlib.Path(__file__).parent.parent.parent
     docs_dir = root / "docs"
 
-    # Collect available docs
-    docs: list[dict] = []
-    if docs_dir.exists():
-        for md in sorted(docs_dir.glob("*.md")):
-            try:
-                import frontmatter as _fm
-                post = _fm.loads(md.read_text(encoding="utf-8"))
-                title = post.metadata.get("title") or md.stem.replace("-", " ").title()
-            except Exception:
-                title = md.stem.replace("-", " ").title()
-            docs.append({"name": md.stem, "title": title})
+    tree = _scan_docs_tree(docs_dir, docs_dir) if docs_dir.exists() else []
+    # Flat list for backwards-compat
+    def _flatten(nodes: list) -> list:
+        result = []
+        for n in nodes:
+            if n["type"] == "doc":
+                result.append({"name": n["path"], "title": n["title"]})
+            elif n.get("children"):
+                result.extend(_flatten(n["children"]))
+        return result
 
-    # Main help content
     content = ""
     for name in ("HOW_TO_USE_RESEARCHBUDDY.md", "README.md"):
         p = root / name
@@ -104,20 +133,26 @@ def get_help():
             content = p.read_text(encoding="utf-8")
             break
 
-    return {"content": content, "docs": docs}
+    return {"content": content, "docs": _flatten(tree), "tree": tree}
 
 
-@app.get("/api/help/{doc_name}")
-def get_help_doc(doc_name: str):
-    """Return the content of a specific doc from the docs/ folder."""
-    root = pathlib.Path(__file__).parent.parent.parent
-    # Sanitise: only allow alphanumeric + hyphens/underscores
+@app.get("/api/help/{doc_path:path}")
+def get_help_doc(doc_path: str):
+    """Return the content of a doc. doc_path can be nested, e.g. 'guides/getting-started'."""
     import re as _re
-    if not _re.fullmatch(r"[a-zA-Z0-9_-]+", doc_name):
-        from fastapi import HTTPException
-        raise HTTPException(400, "Invalid doc name")
-    p = root / "docs" / f"{doc_name}.md"
+    from fastapi import HTTPException
+    if not _re.fullmatch(r"[a-zA-Z0-9/_-]+", doc_path):
+        raise HTTPException(400, "Invalid doc path")
+    root = pathlib.Path(__file__).parent.parent.parent
+    p = root / "docs" / f"{doc_path}.md"
     if not p.exists():
-        from fastapi import HTTPException
-        raise HTTPException(404, f"Doc '{doc_name}' not found")
-    return {"name": doc_name, "content": p.read_text(encoding="utf-8")}
+        raise HTTPException(404, f"Doc '{doc_path}' not found")
+    try:
+        import frontmatter as _fm
+        post = _fm.loads(p.read_text(encoding="utf-8"))
+        title = post.metadata.get("title") or p.stem.replace("-", " ").title()
+        content = p.read_text(encoding="utf-8")
+    except Exception:
+        title = p.stem
+        content = p.read_text(encoding="utf-8")
+    return {"path": doc_path, "title": title, "content": content}
