@@ -1,9 +1,9 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { Plus, Trash2, X } from "lucide-react"
+import { ExternalLink, Plus, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
-import type { Contact } from "@/lib/types"
+import type { Contact, Document } from "@/lib/types"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,8 +30,6 @@ function monthsBetween(start: Date, end: Date) {
 }
 
 const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4"]
-const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function HomePage() {
@@ -39,19 +37,24 @@ export default function HomePage() {
   const router = useRouter()
   const [gantt, setGantt] = useState<GanttData>({ tracks: [], milestones: [] })
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [docs, setDocs] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
   const [addTrack, setAddTrack] = useState(false)
   const [trackName, setTrackName] = useState("")
   const [trackColor, setTrackColor] = useState(TRACK_COLORS[0])
   const [addingItem, setAddingItem] = useState<string | null>(null) // track id
   const [itemForm, setItemForm] = useState({ title: "", start: "", end: "", doc_id: "", mentions: "" })
+  const [selectedItem, setSelectedItem] = useState<(GanttItem & { trackName: string; trackColor: string }) | null>(null)
+  const [addingContact, setAddingContact] = useState(false)
+  const [contactForm, setContactForm] = useState({ name: "", email: "", handle: "" })
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     Promise.all([
       api.get<GanttData>(`/api/projects/${projectId}/gantt`),
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).catch(() => [] as Contact[]),
-    ]).then(([g, c]) => { setGantt(g); setContacts(c) }).finally(() => setLoading(false))
+      api.get<Document[]>(`/api/projects/${projectId}/docs`).catch(() => [] as Document[]),
+    ]).then(([g, c, d]) => { setGantt(g); setContacts(c); setDocs(d) }).finally(() => setLoading(false))
   }, [projectId])
 
   // Compute time range
@@ -106,6 +109,21 @@ export default function HomePage() {
       ...g,
       tracks: g.tracks.map(t => t.id === trackId ? { ...t, items: t.items.filter(i => i.id !== itemId) } : t)
     }))
+    if (selectedItem?.id === itemId) setSelectedItem(null)
+  }
+
+  async function saveContact(e: React.FormEvent) {
+    e.preventDefault()
+    const c = await api.post<Contact>(`/api/projects/${projectId}/contacts`, contactForm)
+    setContacts(prev => [...prev.filter(x => x.handle !== c.handle), c])
+    setContactForm({ name: "", email: "", handle: "" })
+    setAddingContact(false)
+  }
+
+  async function deleteContact(handle: string) {
+    if (!confirm("Remove this contact?")) return
+    await api.delete(`/api/projects/${projectId}/contacts/${handle}`)
+    setContacts(prev => prev.filter(c => c.handle !== handle))
   }
 
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
@@ -199,7 +217,7 @@ export default function HomePage() {
                           <div key={item.id}
                             className="absolute h-7 rounded-md flex items-center px-2 text-white text-[11px] font-medium cursor-pointer hover:opacity-90 group z-20 shadow-sm"
                             style={{ left, width, background: track.color }}
-                            onClick={() => item.doc_id && router.push(`/projects/${projectId}/docs/${item.doc_id}`)}
+                            onClick={() => setSelectedItem({ ...item, trackName: track.name, trackColor: track.color })}
                             title={item.note || item.title}
                           >
                             <span className="truncate">{item.title}</span>
@@ -225,12 +243,16 @@ export default function HomePage() {
                             className="w-28 border rounded px-1.5 py-0.5 text-xs focus:outline-none" />
                           <input type="date" value={itemForm.end} onChange={e => setItemForm({...itemForm, end: e.target.value})} required
                             className="w-28 border rounded px-1.5 py-0.5 text-xs focus:outline-none" />
-                          <input value={itemForm.doc_id} onChange={e => setItemForm({...itemForm, doc_id: e.target.value})}
-                            placeholder="doc id (optional)"
-                            className="w-28 border rounded px-1.5 py-0.5 text-xs focus:outline-none" />
-                          <input value={itemForm.mentions} onChange={e => setItemForm({...itemForm, mentions: e.target.value})}
-                            placeholder="@alice, @bob"
-                            className="w-28 border rounded px-1.5 py-0.5 text-xs focus:outline-none" />
+                          <select value={itemForm.doc_id} onChange={e => setItemForm({...itemForm, doc_id: e.target.value})}
+                            className="w-36 border rounded px-1.5 py-0.5 text-xs focus:outline-none">
+                            <option value="">No doc</option>
+                            {docs.map(doc => <option key={doc.id} value={doc.id}>{doc.title}</option>)}
+                          </select>
+                          <select value={itemForm.mentions} onChange={e => setItemForm({...itemForm, mentions: e.target.value})}
+                            className="w-32 border rounded px-1.5 py-0.5 text-xs focus:outline-none">
+                            <option value="">No owner</option>
+                            {contacts.map(c => <option key={c.handle} value={c.handle}>@{c.handle}</option>)}
+                          </select>
                           <button type="submit" className="text-xs bg-black text-white px-2 py-1 rounded">Add</button>
                           <button type="button" onClick={() => setAddingItem(null)} className="text-gray-400"><X size={13} /></button>
                         </form>
@@ -243,27 +265,83 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* ── Team ── */}
-        {contacts.length > 0 && (
+        {selectedItem && (
           <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
-            <div className="px-5 py-3 border-b">
-              <h3 className="font-semibold text-sm">Team</h3>
+            <div className="px-5 py-3 border-b flex items-center gap-3">
+              <div className="h-2.5 w-2.5 rounded-full" style={{ background: selectedItem.trackColor }} />
+              <div className="min-w-0 flex-1">
+                <h3 className="truncate text-sm font-semibold">{selectedItem.title}</h3>
+                <p className="text-xs text-gray-400">{selectedItem.trackName} · {selectedItem.start} to {selectedItem.end}</p>
+              </div>
+              <button onClick={() => setSelectedItem(null)} className="text-gray-400 hover:text-black"><X size={14} /></button>
             </div>
-            <div className="p-4 flex flex-wrap gap-3">
-              {contacts.map(c => (
-                <div key={c.handle} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                  <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-medium flex items-center justify-center flex-shrink-0">
-                    {(c.name || c.handle)[0]?.toUpperCase()}
+            <div className="grid gap-4 p-4 sm:grid-cols-2">
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Linked doc</p>
+                {selectedItem.doc_id ? (() => {
+                  const doc = docs.find(d => d.id === selectedItem.doc_id)
+                  return (
+                    <button onClick={() => router.push(`/projects/${projectId}/docs/${selectedItem.doc_id}`)}
+                      className="mt-2 flex items-center gap-1.5 text-sm text-blue-600 hover:underline">
+                      {doc?.title ?? selectedItem.doc_id} <ExternalLink size={12} />
+                    </button>
+                  )
+                })() : <p className="mt-2 text-sm text-gray-400">No doc linked.</p>}
+              </div>
+              <div>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</p>
+                {selectedItem.mentions?.length ? (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {selectedItem.mentions.map(handle => {
+                      const c = contacts.find(item => item.handle === handle)
+                      return <span key={handle} className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600">@{c?.handle ?? handle}</span>
+                    })}
                   </div>
-                  <div>
-                    <p className="text-xs font-medium">{c.name || c.handle}</p>
-                    <p className="text-[10px] text-gray-400">@{c.handle}</p>
-                  </div>
-                </div>
-              ))}
+                ) : <p className="mt-2 text-sm text-gray-400">No people linked.</p>}
+              </div>
             </div>
           </div>
         )}
+
+        {/* ── Team ── */}
+        <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
+          <div className="px-5 py-3 border-b flex items-center justify-between">
+            <h3 className="font-semibold text-sm">Team</h3>
+            <button onClick={() => setAddingContact(v => !v)}
+              className="inline-flex items-center gap-1 text-xs border rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">
+              <Plus size={12} /> Contact
+            </button>
+          </div>
+          {addingContact && (
+            <form onSubmit={saveContact} className="grid gap-2 border-b bg-gray-50 px-4 py-3 sm:grid-cols-[1fr_1fr_0.8fr_auto]">
+              <input value={contactForm.name} onChange={e => setContactForm({ ...contactForm, name: e.target.value })}
+                placeholder="Name" className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              <input value={contactForm.email} onChange={e => setContactForm({ ...contactForm, email: e.target.value })}
+                placeholder="email@lab.edu" className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              <input value={contactForm.handle} onChange={e => setContactForm({ ...contactForm, handle: e.target.value })}
+                placeholder="handle" required className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Save</button>
+            </form>
+          )}
+          <div className="p-4 flex flex-wrap gap-3">
+            {contacts.length === 0 ? (
+              <p className="text-sm text-gray-400">No contacts yet.</p>
+            ) : contacts.map(c => (
+              <div key={c.handle} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
+                <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-medium flex items-center justify-center flex-shrink-0">
+                  {(c.name || c.handle)[0]?.toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-xs font-medium">{c.name || c.handle}</p>
+                  <p className="text-[10px] text-gray-400">@{c.handle}</p>
+                </div>
+                <button onClick={() => deleteContact(c.handle)} className="ml-1 text-gray-300 hover:text-red-500">
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   )

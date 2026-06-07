@@ -5,6 +5,7 @@ import { RefreshCw, Settings, Download, Search, Image } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
+import ModuleLinksPanel from "@/components/ModuleLinksPanel"
 
 export default function PapersPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -205,6 +206,14 @@ export default function PapersPage() {
       {/* ── Gallery ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="mb-4 space-y-3">
+          <ModuleLinksPanel
+            projectId={projectId}
+            section="papers"
+            kind="link"
+            title="Paper links"
+            labelPlaceholder="GitHub / Figma / Overleaf"
+            urlPlaceholder="https://..."
+          />
           <SectionResourcesPanel projectId={projectId} section="papers" title="Papers docs and skills" />
           <AIPapersPanel projectId={projectId} />
         </div>

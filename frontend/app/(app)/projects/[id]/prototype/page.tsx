@@ -1,6 +1,7 @@
 "use client"
 import { useParams } from "next/navigation"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
+import ModuleLinksPanel from "@/components/ModuleLinksPanel"
 
 export default function PrototypePage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -10,6 +11,14 @@ export default function PrototypePage() {
       <div>
         <h2 className="text-base font-semibold">Prototype</h2>
       </div>
+      <ModuleLinksPanel
+        projectId={projectId}
+        section="prototype"
+        kind="github"
+        title="GitHub links"
+        labelPlaceholder="Repository or branch"
+        urlPlaceholder="https://github.com/..."
+      />
       <SectionResourcesPanel projectId={projectId} section="prototype" title="Prototype docs & skills" />
     </div>
   )

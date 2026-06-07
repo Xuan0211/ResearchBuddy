@@ -1,6 +1,7 @@
 "use client"
 import { useParams } from "next/navigation"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
+import ModuleLinksPanel from "@/components/ModuleLinksPanel"
 
 export default function ImagesPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -10,6 +11,14 @@ export default function ImagesPage() {
       <div>
         <h2 className="text-base font-semibold">Images</h2>
       </div>
+      <ModuleLinksPanel
+        projectId={projectId}
+        section="images"
+        kind="figma"
+        title="Figma links"
+        labelPlaceholder="Figma file or frame"
+        urlPlaceholder="https://figma.com/..."
+      />
       <SectionResourcesPanel projectId={projectId} section="images" title="Image docs & skills" />
     </div>
   )

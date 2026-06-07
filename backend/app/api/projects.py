@@ -351,6 +351,7 @@ def batch_drive_sync(
 
     try:
         service = gd.get_service(token, str(current_user.id), session)
+        docs_service = gd.get_docs_service(token, str(current_user.id), session)
         response = {
             "ok": True,
             "root": gd.ensure_project_drive_root(service, project_id, project.name),

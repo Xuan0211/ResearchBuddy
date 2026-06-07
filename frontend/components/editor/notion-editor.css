@@ -32,6 +32,30 @@
 /* Bold / italic */
 .notion-editor .tiptap strong { font-weight: 600; }
 
+/* ResearchBuddy inline annotation marks survive Markdown round-trips as HTML spans. */
+.notion-editor .tiptap .rb-annotation[data-rb-tone="red"] {
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 3px;
+  padding: 0 0.12em;
+}
+.notion-editor .tiptap .rb-annotation[data-rb-tone="yellow"] {
+  background: #fef3c7;
+  border-radius: 3px;
+  padding: 0 0.12em;
+}
+.notion-editor .tiptap .rb-annotation[data-rb-tone="gray"] {
+  color: #6b7280;
+  background: #f3f4f6;
+  border-radius: 3px;
+  padding: 0 0.12em;
+}
+.notion-editor .tiptap .rb-annotation[data-rb-underline="true"],
+.notion-editor .tiptap u {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
 /* Code inline */
 .notion-editor .tiptap code {
   background: #f0f0f0;

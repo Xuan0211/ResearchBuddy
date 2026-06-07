@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
-import { AlertCircle, CheckCircle2, Cloud, Copy, FileJson, FolderGit2, FolderPlus, RefreshCw } from "lucide-react"
+import { AlertCircle, CheckCircle2, Copy, FileJson, FolderGit2, RefreshCw } from "lucide-react"
 import { api } from "@/lib/api"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
@@ -32,36 +32,11 @@ type WorkspaceResponse = {
   }
 }
 
-type DriveRootResponse = {
-  configured: boolean
-  settings_path: string
-  root_folder_id: string
-  root_folder_name: string
-  root_folder_link: string
-  source: string
-}
-
-type BatchDriveSyncResponse = {
-  ok: boolean
-  root: { root_folder_name?: string; root_folder_link?: string }
-  docs?: { synced: number; failed: number } | null
-  meetings?: { synced: number; failed: number } | null
-}
-
 export default function WorkspacePage() {
   const { id: projectId } = useParams<{ id: string }>()
   const [data, setData] = useState<WorkspaceResponse | null>(null)
-  const [driveRoot, setDriveRoot] = useState<DriveRootResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<"" | "ensure" | "reindex">("")
-  const [driveBusy, setDriveBusy] = useState<"" | "root" | "sync">("")
-  const [driveMode, setDriveMode] = useState<"existing" | "new" | "default">("existing")
-  const [folderUrl, setFolderUrl] = useState("")
-  const [folderName, setFolderName] = useState("")
-  const [parentFolderUrl, setParentFolderUrl] = useState("")
-  const [syncScope, setSyncScope] = useState<"all" | "docs" | "meetings">("all")
-  const [syncMode, setSyncMode] = useState<"mapped" | "new">("mapped")
-  const [syncResult, setSyncResult] = useState<BatchDriveSyncResponse | null>(null)
   const [copied, setCopied] = useState("")
 
   async function load() {
@@ -73,13 +48,7 @@ export default function WorkspacePage() {
     }
   }
 
-  async function loadDriveRoot() {
-    const root = await api.get<DriveRootResponse>(`/api/projects/${projectId}/drive-root`).catch(() => null)
-    setDriveRoot(root)
-    if (root?.root_folder_name) setFolderName(root.root_folder_name)
-  }
-
-  useEffect(() => { load(); loadDriveRoot() }, [projectId])
+  useEffect(() => { load() }, [projectId])
 
   const gitCommand = useMemo(() => {
     if (!data) return ""
@@ -103,48 +72,6 @@ export default function WorkspacePage() {
       await load()
     } finally {
       setBusy("")
-    }
-  }
-
-  async function saveDriveRoot() {
-    setDriveBusy("root")
-    try {
-      const root = await api.put<DriveRootResponse>(`/api/projects/${projectId}/drive-root`, {
-        mode: driveMode,
-        folder_url: folderUrl,
-        folder_name: folderName,
-        parent_folder_url: parentFolderUrl,
-      })
-      setDriveRoot({
-        configured: true,
-        settings_path: ".researchbuddy/drive-settings.json",
-        root_folder_id: root.root_folder_id,
-        root_folder_name: root.root_folder_name,
-        root_folder_link: root.root_folder_link,
-        source: root.source,
-      })
-      setFolderUrl("")
-      setParentFolderUrl("")
-    } catch (err: any) {
-      alert(err.message)
-    } finally {
-      setDriveBusy("")
-    }
-  }
-
-  async function batchSyncDrive() {
-    setDriveBusy("sync")
-    try {
-      const result = await api.post<BatchDriveSyncResponse>(`/api/projects/${projectId}/drive/sync`, {
-        scope: syncScope,
-        mode: syncMode,
-      })
-      setSyncResult(result)
-      await loadDriveRoot()
-    } catch (err: any) {
-      alert(err.message)
-    } finally {
-      setDriveBusy("")
     }
   }
 
@@ -243,92 +170,6 @@ export default function WorkspacePage() {
                 <span className="text-gray-500">System owned</span>
                 <code className="text-xs">{systemOwned.join(", ")}</code>
               </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-md border">
-          <div className="border-b px-4 py-3 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <Cloud size={15} /> Google Drive Workspace
-            </div>
-            {driveRoot?.root_folder_link ? (
-              <a href={driveRoot.root_folder_link} target="_blank" rel="noreferrer"
-                className="text-xs text-green-600 hover:underline">
-                {driveRoot.root_folder_name || "Open folder"}
-              </a>
-            ) : (
-              <span className="text-xs text-gray-400">No project folder selected</span>
-            )}
-          </div>
-          <div className="grid gap-4 p-4 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <select value={driveMode} onChange={e => setDriveMode(e.target.value as any)}
-                  className="rounded-md border px-2 py-1.5 text-xs text-gray-700">
-                  <option value="existing">Use existing folder</option>
-                  <option value="new">Create new folder</option>
-                  <option value="default">Use ResearchBuddy default</option>
-                </select>
-                {driveMode === "existing" && (
-                  <input value={folderUrl} onChange={e => setFolderUrl(e.target.value)}
-                    placeholder="Paste Drive folder URL"
-                    className="min-w-72 flex-1 rounded-md border px-2 py-1.5 text-xs" />
-                )}
-                {driveMode === "new" && (
-                  <>
-                    <input value={folderName} onChange={e => setFolderName(e.target.value)}
-                      placeholder="Folder name"
-                      className="min-w-48 rounded-md border px-2 py-1.5 text-xs" />
-                    <input value={parentFolderUrl} onChange={e => setParentFolderUrl(e.target.value)}
-                      placeholder="Optional parent folder URL"
-                      className="min-w-64 flex-1 rounded-md border px-2 py-1.5 text-xs" />
-                  </>
-                )}
-                <button onClick={saveDriveRoot} disabled={driveBusy === "root"}
-                  className="inline-flex items-center gap-2 rounded-md bg-black px-3 py-1.5 text-xs text-white disabled:opacity-50">
-                  <FolderPlus size={13} />
-                  {driveBusy === "root" ? "Saving…" : "Save folder"}
-                </button>
-              </div>
-              <p className="text-xs text-gray-500">
-                Files sync under this Drive folder. ResearchBuddy creates <code>Docs/</code> and <code>Meetings/</code> subfolders automatically.
-              </p>
-              <div className="text-xs text-gray-500">
-                Settings file: <code>{driveRoot?.settings_path || ".researchbuddy/drive-settings.json"}</code>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <select value={syncScope} onChange={e => setSyncScope(e.target.value as any)}
-                  className="rounded-md border px-2 py-1.5 text-xs text-gray-700">
-                  <option value="all">Docs + Meetings</option>
-                  <option value="docs">Docs only</option>
-                  <option value="meetings">Meetings only</option>
-                </select>
-                <select value={syncMode} onChange={e => setSyncMode(e.target.value as any)}
-                  className="rounded-md border px-2 py-1.5 text-xs text-gray-700">
-                  <option value="mapped">Update linked files</option>
-                  <option value="new">Create new files</option>
-                </select>
-                <button onClick={batchSyncDrive} disabled={driveBusy === "sync"}
-                  className="inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                  <RefreshCw size={13} className={driveBusy === "sync" ? "animate-spin" : ""} />
-                  {driveBusy === "sync" ? "Syncing…" : "Batch sync"}
-                </button>
-              </div>
-              {syncResult ? (
-                <div className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600">
-                  Docs: {syncResult.docs ? `${syncResult.docs.synced} synced, ${syncResult.docs.failed} failed` : "skipped"}
-                  <span className="mx-2 text-gray-300">/</span>
-                  Meetings: {syncResult.meetings ? `${syncResult.meetings.synced} synced, ${syncResult.meetings.failed} failed` : "skipped"}
-                </div>
-              ) : (
-                <p className="text-xs text-gray-500">
-                  Manual batch sync is visible immediately: local files stay loaded while Drive work runs in the background request.
-                </p>
-              )}
             </div>
           </div>
         </section>

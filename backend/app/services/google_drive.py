@@ -326,6 +326,14 @@ SYNC_FOOTER = "\n\n---\n_Synced by ResearchBuddy_"
 _SYNC_FOOTER_STRIP = "---\n_Synced by ResearchBuddy_"
 _IMG_MD_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _IMG_PLACEHOLDER_RE = re.compile(r"\[image:\s*([^\]|]*)\s*\|\s*([^\]]+)\]")
+_GOOGLE_HEADING_TO_MD = {
+    "HEADING_1": "#",
+    "HEADING_2": "##",
+    "HEADING_3": "###",
+    "HEADING_4": "####",
+    "HEADING_5": "#####",
+    "HEADING_6": "######",
+}
 
 
 def strip_sync_footer(text: str) -> str:
@@ -415,7 +423,7 @@ def markdown_to_google_doc_html(title: str, markdown: str, add_footer: bool = Tr
     if in_ul:
         body_lines.append("</ul>")
 
-    footer = "<hr><p><em>Synced by ResearchBuddy</em></p>" if add_footer else ""
+    footer = "<hr><p style='color:#2563eb'><em>Synced by ResearchBuddy</em></p>" if add_footer else ""
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>{html.escape(title)}</title></head><body>"
@@ -538,13 +546,114 @@ def _batch_update_google_doc(docs_service, document_id: str, requests: list[dict
     )
 
 
-def _plain_tab_text(markdown: str, add_footer: bool = False) -> str:
+def _rgb(hex_color: str) -> dict:
+    value = hex_color.lstrip("#")
+    return {
+        "red": int(value[0:2], 16) / 255,
+        "green": int(value[2:4], 16) / 255,
+        "blue": int(value[4:6], 16) / 255,
+    }
+
+
+def _append_text_style_request(
+    requests: list[dict],
+    *,
+    start: int,
+    end: int,
+    tab_id: str | None = None,
+    color: str = "#2563eb",
+    bold: bool = False,
+) -> None:
+    if end <= start:
+        return
+    range_payload: dict = {"startIndex": start, "endIndex": end}
+    if tab_id:
+        range_payload["tabId"] = tab_id
+    requests.append({
+        "updateTextStyle": {
+            "range": range_payload,
+            "textStyle": {
+                "foregroundColor": {"color": {"rgbColor": _rgb(color)}},
+                "bold": bold,
+            },
+            "fields": "foregroundColor,bold",
+        }
+    })
+
+
+def _special_sync_style_requests(text: str, *, tab_id: str | None = None, base_index: int = 1) -> list[dict]:
+    """Style ResearchBuddy sync markers without changing exported plain text."""
+    requests: list[dict] = []
+    blue = "#2563eb"
+    for marker in ("Synced by ResearchBuddy",):
+        start = text.find(marker)
+        while start >= 0:
+            _append_text_style_request(
+                requests,
+                start=base_index + start,
+                end=base_index + start + len(marker),
+                tab_id=tab_id,
+                color=blue,
+                bold=False,
+            )
+            start = text.find(marker, start + len(marker))
+
+    for match in re.finditer(r"\[image:[^\]]+\]|\[\[[^\]]+\]\]", text):
+        _append_text_style_request(
+            requests,
+            start=base_index + match.start(),
+            end=base_index + match.end(),
+            tab_id=tab_id,
+            color=blue,
+            bold=True,
+        )
+    return requests
+
+
+def _heading_style_requests(
+    headings: list[tuple[int, int, str]],
+    *,
+    tab_id: str | None = None,
+    base_index: int = 1,
+) -> list[dict]:
+    requests: list[dict] = []
+    for start, end, style in headings:
+        range_payload: dict = {"startIndex": base_index + start, "endIndex": base_index + max(end, start + 1)}
+        if tab_id:
+            range_payload["tabId"] = tab_id
+        requests.append({
+            "updateParagraphStyle": {
+                "range": range_payload,
+                "paragraphStyle": {"namedStyleType": style},
+                "fields": "namedStyleType",
+            }
+        })
+    return requests
+
+
+def _google_plain_text_payload(markdown: str, add_footer: bool = False) -> tuple[str, list[tuple[int, int, str]]]:
     text = strip_sync_footer((markdown or "").strip())
     # Replace markdown images with a restorable placeholder — insertText can't embed images.
     text = _IMG_MD_RE.sub(markdown_image_placeholder, text)
+    headings: list[tuple[int, int, str]] = []
+    rendered_lines: list[str] = []
+    cursor = 0
+    for raw in text.splitlines():
+        line = raw.rstrip()
+        heading = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if heading:
+            line = heading.group(2)
+            headings.append((cursor, cursor + len(line), f"HEADING_{len(heading.group(1))}"))
+        rendered_lines.append(line)
+        cursor += len(line) + 1
+    text = "\n".join(rendered_lines).strip()
     if add_footer:
-        return f"{text}{SYNC_FOOTER}\n" if text else f"{SYNC_FOOTER}\n"
-    return f"{text}\n" if text else "\n"
+        return (f"{text}{SYNC_FOOTER}\n" if text else f"{SYNC_FOOTER}\n"), headings
+    return (f"{text}\n" if text else "\n"), headings
+
+
+def _plain_tab_text(markdown: str, add_footer: bool = False) -> str:
+    return _google_plain_text_payload(markdown, add_footer)[0]
 
 
 def _tabs_as_sync_markdown(tabs: list[dict]) -> str:
@@ -658,6 +767,7 @@ def upsert_google_doc_tabs(
             for i, (tab_def, tab) in enumerate(zip(normalized, target_tabs)):
                 tab_id = _tab_id(tab)
                 end_index = _tab_end_index(tab)
+                tab_text, heading_ranges = _google_plain_text_payload(tab_def["content"], add_footer=(i == last_idx))
                 if end_index > 2:
                     content_requests.append({
                         "deleteContentRange": {
@@ -670,10 +780,12 @@ def upsert_google_doc_tabs(
                     })
                 content_requests.append({
                     "insertText": {
-                        "text": _plain_tab_text(tab_def["content"], add_footer=(i == last_idx)),
+                        "text": tab_text,
                         "endOfSegmentLocation": {"tabId": tab_id},
                     }
                 })
+                content_requests.extend(_special_sync_style_requests(tab_text, tab_id=tab_id))
+                content_requests.extend(_heading_style_requests(heading_ranges, tab_id=tab_id))
             if content_requests:
                 _batch_update_google_doc(docs_service, document_id, content_requests)
         except Exception:
@@ -700,12 +812,14 @@ def upsert_google_doc_tabs(
                     "range": {"startIndex": 1, "endIndex": end_index - 1}
                 }
             })
+        body_text = _tabs_as_sync_markdown(normalized)
         body_requests.append({
             "insertText": {
-                "text": _tabs_as_sync_markdown(normalized),
+                "text": body_text,
                 "endOfSegmentLocation": {"segmentId": ""},
             }
         })
+        body_requests.extend(_special_sync_style_requests(body_text))
         if body_requests:
             _batch_update_google_doc(docs_service, document_id, body_requests)
 
@@ -737,6 +851,9 @@ def _structural_elements_to_text(elements: list[dict]) -> str:
             text += run.get("textRun", {}).get("content", "")
         text = text.rstrip("\n")
         if text:
+            named_style = paragraph.get("paragraphStyle", {}).get("namedStyleType", "")
+            if named_style in _GOOGLE_HEADING_TO_MD:
+                text = f"{_GOOGLE_HEADING_TO_MD[named_style]} {text}"
             chunks.append(text)
     return image_placeholder_to_markdown("\n\n".join(chunks).strip())
 
