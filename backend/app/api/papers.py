@@ -113,7 +113,8 @@ def _list_all_papers(project_id: str) -> list[dict]:
     paths = list_project_dir(project_id, "papers")
     papers = []
     for p in paths:
-        if not p.endswith(".md"):
+        parts = p.split("/")
+        if not p.endswith(".md") or len(parts) != 2:
             continue
         try:
             meta = _parse_paper(project_id, p)
@@ -331,7 +332,8 @@ def get_paper_refs(
     refs = []
     wiki_re = re.compile(r"\[\[([^\]]+)\]\]")
     for p in doc_paths:
-        if not p.endswith(".md"):
+        parts = p.split("/")
+        if not p.endswith(".md") or (len(parts) > 1 and parts[1] in {"docs", "skills", "files"}):
             continue
         try:
             import frontmatter as _fm

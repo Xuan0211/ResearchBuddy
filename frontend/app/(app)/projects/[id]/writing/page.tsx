@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
-import { ExternalLink, FileCode, GitBranch, Plus, X } from "lucide-react"
+import { ExternalLink, FileCode, GitBranch, Plus, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
@@ -52,6 +52,16 @@ export default function WritingPage() {
     await api.patch(`/api/projects/${projectId}/writing/${wp.id}`, urlForm)
     setSelected(prev => prev ? { ...prev, ...urlForm } : prev)
     setProjects(prev => prev.map(p => p.id === wp.id ? { ...p, ...urlForm } : p))
+    setEditingUrls(false)
+  }
+
+  async function deleteWritingProject(wp: WritingProject) {
+    if (!confirm(`Delete "${wp.title}"?`)) return
+    if (!confirm("This will remove the writing project folder from the git workspace. Continue?")) return
+    await api.delete(`/api/projects/${projectId}/writing/${wp.id}`)
+    setProjects(prev => prev.filter(p => p.id !== wp.id))
+    setSelected(null)
+    setSelectedFile(null)
     setEditingUrls(false)
   }
 
@@ -143,8 +153,19 @@ export default function WritingPage() {
               {!selectedFile ? (
                 <div className="space-y-5 max-w-2xl">
                   <div>
-                    <h2 className="text-xl font-semibold">{selected.title}</h2>
-                    {selected.description && <p className="text-sm text-gray-500 mt-1">{selected.description}</p>}
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0 flex-1">
+                        <h2 className="text-xl font-semibold truncate">{selected.title}</h2>
+                        {selected.description && <p className="text-sm text-gray-500 mt-1">{selected.description}</p>}
+                      </div>
+                      <button
+                        onClick={() => deleteWritingProject(selected)}
+                        title="Delete writing project"
+                        className="p-2 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Links */}
@@ -180,7 +201,12 @@ export default function WritingPage() {
                     </div>
                   )}
 
-                  <SectionResourcesPanel projectId={projectId} section="writing" title="Writing skills & docs" />
+                  <SectionResourcesPanel
+                    projectId={projectId}
+                    section="writing"
+                    scope={selected.id}
+                    title="Writing resources"
+                  />
 
                   <div className="p-4 bg-gray-50 rounded-xl text-xs text-gray-500 space-y-1">
                     <p className="font-medium text-gray-700">AI writing guidelines</p>

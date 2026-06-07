@@ -125,11 +125,12 @@ def list_docs(
     paths = list_project_dir(project_id, "docs")
     docs = []
     for p in paths:
-        if not p.endswith(".md"):
+        parts = p.split("/")
+        if not p.endswith(".md") or (len(parts) > 1 and parts[1] in {"docs", "skills", "files"}):
             continue
         try:
             d = _parse_doc(project_id, p)
-            docs.append({k: v for k, v in d.items() if k not in ("_body", "_path")})
+            docs.append({k: v for k, v in d.items() if k != "_body"})
         except Exception:
             continue
     return docs

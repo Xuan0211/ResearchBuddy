@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import { AlertCircle, CheckCircle2, Cloud, Copy, FileJson, FolderGit2, FolderPlus, RefreshCw } from "lucide-react"
 import { api } from "@/lib/api"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 type WorkspaceItem = {
   id: string
@@ -383,6 +384,8 @@ export default function WorkspacePage() {
             </div>
           </div>
         </section>
+
+        <SectionResourcesPanel projectId={projectId} section="workspace" title="Workspace resources" />
       </div>
     </div>
   )

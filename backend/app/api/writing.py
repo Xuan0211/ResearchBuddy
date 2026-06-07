@@ -1,5 +1,6 @@
 """Writing / LaTeX workspace API."""
 import re
+import shutil
 import uuid
 from pathlib import Path
 
@@ -109,14 +110,54 @@ _GITIGNORE = "\n".join([
     "libertinusmath-regular.otf", "main.xdv", ".DS_Store",
 ]) + "\n"
 
+_PAPER_WRITING_SKILL = """---
+title: Paper writing core
+tags: [writing, latex]
+---
+
+# Paper Writing Core
+
+Use this skill when editing this paper workspace.
+
+## Rules
+- Preserve the LaTeX project structure.
+- Edit `sections/*.tex` for manuscript content.
+- Keep `reference.bib` read-only because it is Zotero managed.
+- Add uncertain AI-generated references to `ai-generated.bib`.
+- Use `\\aicite{key}` for AI-generated references until they are confirmed.
+"""
+
+_CITATION_SKILL = """---
+title: Citation management
+tags: [citations, zotero]
+---
+
+# Citation Management
+
+Use this skill when adding or checking citations.
+
+## Rules
+- Prefer confirmed entries already in `reference.bib`.
+- Put unconfirmed BibTeX entries in `ai-generated.bib`.
+- Do not edit `reference.bib` directly.
+- After human confirmation, ResearchBuddy can move AI references into the trusted library.
+"""
+
 
 def _init_latex_structure(base: Path) -> None:
     (base / "sections").mkdir(exist_ok=True)
     (base / "images").mkdir(exist_ok=True)
+    (base / "docs").mkdir(exist_ok=True)
+    (base / "files").mkdir(exist_ok=True)
+    (base / "skills" / "paper-writing-core").mkdir(parents=True, exist_ok=True)
+    (base / "skills" / "citation-management").mkdir(parents=True, exist_ok=True)
     (base / "main.tex").write_text(_MAIN_TEX, encoding="utf-8")
     (base / "reference.bib").write_text(_REFERENCE_BIB, encoding="utf-8")
     (base / "ai-generated.bib").write_text(_AI_BIB, encoding="utf-8")
     (base / "sections" / "introduction.tex").write_text(_INTRO_TEX, encoding="utf-8")
+    (base / "skills" / "paper-writing-core" / "SKILL.md").write_text(_PAPER_WRITING_SKILL, encoding="utf-8")
+    (base / "skills" / "citation-management" / "SKILL.md").write_text(_CITATION_SKILL, encoding="utf-8")
+    (base / "links.json").write_text('{\n  "links": []\n}\n', encoding="utf-8")
     (base / ".gitignore").write_text(_GITIGNORE, encoding="utf-8")
 
 
@@ -213,6 +254,24 @@ def update_writing_project(
         if updates:
             fm.update_metadata(path, updates)
     return {"ok": True}
+
+
+@router.delete("/{writing_id}", status_code=204)
+def delete_writing_project(
+    project_id: str,
+    writing_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    if ".." in writing_id or "/" in writing_id or writing_id.startswith("."):
+        raise HTTPException(400, "Invalid writing project id")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Delete writing project: {writing_id}"
+        base = wt / "writing" / writing_id
+        if not base.exists() or not (base / "manifest.md").exists():
+            raise HTTPException(404)
+        shutil.rmtree(base)
 
 
 @router.get("/{writing_id}/file")

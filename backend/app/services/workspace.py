@@ -31,7 +31,7 @@ CONTENT_DIRS = {
     "assets": "Images, PDFs, datasets, and other binary assets",
     "team": "Shared contacts, roles, and collaboration metadata",
     "skills": "Reusable agent/team playbooks and local skills",
-    "section-resources": "Section-scoped docs and skill attachments",
+    "workspace": "Workspace-level agent instructions, docs, and companion files",
 }
 
 DEFAULT_MANIFEST: dict[str, Any] = {
@@ -39,7 +39,7 @@ DEFAULT_MANIFEST: dict[str, Any] = {
     "version": WORKSPACE_VERSION,
     "source_of_truth": "git-workspace",
     "agent_contract": {
-        "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "section-resources"],
+        "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "workspace"],
         "system_owned": [SYSTEM_DIR],
         "content_format": "markdown-with-yaml-frontmatter",
         "citation_syntax": "[[paper_id]]",
@@ -58,9 +58,16 @@ DEFAULT_MANIFEST: dict[str, Any] = {
             "root": "skills",
             "preferred": ["markdown", "codex-skill"],
         },
-        "section_resources": {
-            "root": "section-resources",
-            "preferred": ["markdown", "json"],
+        "module_resources": {
+            "root": "<module>/skills|docs|files",
+            "preferred": ["codex-skill", "markdown", "json", "assets"],
+            "contract": {
+                "skills": "Each module keeps copied skills in <module>/skills/ so cloned agents can read them locally.",
+                "docs": "Each module keeps supporting docs in <module>/docs/.",
+                "files": "Each module keeps non-markdown companion files in <module>/files/.",
+                "links": "External design/code links live in <module>/links.json.",
+                "writing": "Writing resources are scoped per paper at writing/<writing_id>/skills|docs|files.",
+            },
         },
     },
     "sync": {
@@ -105,12 +112,29 @@ def ensure_workspace(project_id: str, project_name: str = "") -> dict[str, Any]:
         for rel_dir in [
             *CONTENT_DIRS.keys(),
             SYSTEM_DIR,
+            "workspace/docs",
+            "workspace/skills",
+            "workspace/files",
             "assets/images",
+            "assets/images/docs",
+            "assets/images/skills",
+            "assets/images/files",
             "assets/pdfs",
-            "section-resources/papers/docs",
-            "section-resources/meetings/docs",
-            "section-resources/coding/docs",
-            "section-resources/workspace/docs",
+            "papers/docs",
+            "papers/skills",
+            "papers/files",
+            "meetings/docs",
+            "meetings/skills",
+            "meetings/files",
+            "coding/docs",
+            "coding/skills",
+            "coding/files",
+            "docs/docs",
+            "docs/skills",
+            "docs/files",
+            "prototypes/docs",
+            "prototypes/skills",
+            "prototypes/files",
         ]:
             path = root / rel_dir
             path.mkdir(parents=True, exist_ok=True)
@@ -158,6 +182,20 @@ def _parse_markdown(project_id: str, path: str) -> tuple[dict[str, Any], str, li
         return {}, "", issues
 
 
+def _is_module_resource_path(path: str) -> bool:
+    parts = path.split("/")
+    resource_dirs = {"skills", "docs", "files"}
+    if len(parts) >= 3 and parts[0] in {"papers", "meetings", "coding", "prototypes", "workspace"} and parts[1] in resource_dirs:
+        return True
+    if len(parts) >= 3 and parts[0] == "docs" and parts[1] in {"skills", "files"}:
+        return True
+    if len(parts) >= 4 and parts[0] == "writing" and parts[2] in resource_dirs:
+        return True
+    if len(parts) >= 4 and parts[0] == "assets" and parts[1] == "images" and parts[2] in resource_dirs:
+        return True
+    return False
+
+
 def build_workspace_index(project_id: str) -> dict[str, Any]:
     """Build an index from the git workspace without mutating it."""
     manifest, manifest_exists = _load_manifest(project_id)
@@ -170,6 +208,8 @@ def build_workspace_index(project_id: str) -> dict[str, Any]:
         top = path.split("/", 1)[0]
         if top in counts and not path.endswith(".gitkeep"):
             counts[top] += 1
+        if _is_module_resource_path(path):
+            continue
         if top not in {"papers", "docs", "meetings", "writing", "skills"} or not path.endswith(".md"):
             continue
 

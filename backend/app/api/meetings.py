@@ -285,7 +285,8 @@ def list_meetings(
     paths = list_project_dir(project_id, "meetings")
     meetings = []
     for p in sorted(paths, reverse=True):
-        if not p.endswith(".md"):
+        parts = p.split("/")
+        if not p.endswith(".md") or len(parts) != 2:
             continue
         try:
             m = _parse_meeting(project_id, p)
@@ -876,7 +877,8 @@ async def sync_mtg_log(
     paths = list_project_dir(project_id, "meetings")
     meetings_meta: list[dict] = []
     for p in sorted(paths, reverse=True):
-        if not p.endswith(".md"):
+        parts = p.split("/")
+        if not p.endswith(".md") or len(parts) != 2:
             continue
         try:
             m = _parse_meeting(project_id, p)

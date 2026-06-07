@@ -76,18 +76,28 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
 
 
 def _build_attachment_map(project_id: str) -> dict[str, list[str]]:
-    """Return {skill_id: [section, ...]} from all section-resources/*/skills.json."""
-    import json
-    ALL_SECTIONS = ["papers", "meetings", "coding", "workspace", "writing", "docs"]
+    """Return {skill_id: [section, ...]} from module-local skills folders."""
+    section_roots = {
+        "papers": "papers/skills",
+        "meetings": "meetings/skills",
+        "coding": "coding/skills",
+        "workspace": "workspace/skills",
+        "docs": "docs/skills",
+        "images": "assets/images/skills",
+        "prototype": "prototypes/skills",
+    }
     attachment: dict[str, list[str]] = {}
-    for section in ALL_SECTIONS:
-        try:
-            raw = read_project_file(project_id, f"section-resources/{section}/skills.json")
-            data = json.loads(raw)
-            for sid in data.get("skills", []):
-                attachment.setdefault(str(sid), []).append(section)
-        except Exception:
-            pass
+    for section, root in section_roots.items():
+        for path in list_project_dir(project_id, root):
+            if not path.endswith(".md") or path.endswith(".gitkeep"):
+                continue
+            sid = path.split("/")[-2] if path.endswith("/SKILL.md") else Path(path).stem
+            attachment.setdefault(sid, []).append(section)
+    for path in list_project_dir(project_id, "writing"):
+        parts = path.split("/")
+        if len(parts) >= 4 and parts[2] == "skills" and path.endswith(".md") and not path.endswith(".gitkeep"):
+            sid = parts[-2] if path.endswith("/SKILL.md") else Path(path).stem
+            attachment.setdefault(sid, []).append("writing")
     return attachment
 
 

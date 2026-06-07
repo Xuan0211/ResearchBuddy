@@ -45,6 +45,20 @@ export const api = {
     return res.json()
   },
 
+  uploadForm: async <T>(path: string, form: FormData): Promise<T> => {
+    const token = getToken()
+    const res = await fetch(`${BASE}${path}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    })
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }))
+      throw new Error(formatApiError(err.detail ?? "Upload failed"))
+    }
+    return res.json()
+  },
+
   download: async (path: string): Promise<Blob> => {
     const token = getToken()
     const res = await fetch(`${BASE}${path}`, {
@@ -72,6 +86,9 @@ function formatApiError(detail: unknown): string {
     d.google_status ? `Google status: ${d.google_status}` : "",
     typeof d.google_reason === "string" ? `Google reason: ${d.google_reason}` : "",
     typeof d.google_response === "string" ? `Google response: ${d.google_response}` : "",
+    Array.isArray(d.issues)
+      ? `Issues:\n${d.issues.map((item: any) => `- ${item.path ?? "file"}: ${item.error ?? "invalid"}`).join("\n")}`
+      : "",
   ].filter(Boolean)
 
   return lines.join("\n")

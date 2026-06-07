@@ -87,11 +87,36 @@ export interface SectionResourceDoc {
   metadata?: Record<string, unknown>
 }
 
+export interface SectionResourceDocRef {
+  type: "doc" | "folder"
+  path: string
+}
+
+export interface SectionResourceLink {
+  id: string
+  kind: string
+  title: string
+  url: string
+}
+
+export interface SectionResourceTreeNode {
+  type: "dir" | "file"
+  name: string
+  path: string
+  children?: SectionResourceTreeNode[]
+}
+
 export interface SectionResources {
   section: string
+  scope?: string
   docs: SectionResourceDoc[]
+  attached_docs: SectionResourceDoc[]
+  doc_refs: SectionResourceDocRef[]
   skills: ProjectSkill[]
   skill_ids: string[]
+  links: SectionResourceLink[]
+  tree: SectionResourceTreeNode[]
+  files: string[]
   local_root: string
 }
 

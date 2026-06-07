@@ -106,12 +106,14 @@ Describe this skill here.
 // ── Section labels ────────────────────────────────────────────────────────────
 
 const SECTION_LABELS: Record<string, string> = {
-  papers: "📄 Papers",
-  meetings: "📅 Meetings",
-  docs: "📝 Docs",
-  writing: "✍️ Writing",
-  coding: "🧪 Coding",
-  workspace: "🛠 Workspace",
+  papers: "Papers",
+  meetings: "Meetings",
+  docs: "Docs",
+  writing: "Writing",
+  coding: "Coding",
+  workspace: "Workspace",
+  images: "Images",
+  prototype: "Prototype",
 }
 
 // ── Main component ────────────────────────────────────────────────────────────

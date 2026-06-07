@@ -3,7 +3,7 @@
   "version": "0.1",
   "source_of_truth": "git-workspace",
   "agent_contract": {
-    "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "section-resources"],
+    "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "workspace"],
     "system_owned": [".researchbuddy"],
     "content_format": "markdown-with-yaml-frontmatter",
     "citation_syntax": "[[paper_id]]"
@@ -17,7 +17,7 @@
     "assets": "Images, PDFs, datasets, and other binary assets",
     "team": "Shared contacts, roles, and collaboration metadata",
     "skills": "Reusable agent/team playbooks and local skills",
-    "section-resources": "Section-scoped docs and skill attachments"
+    "workspace": "Workspace-level agent instructions, docs, and companion files"
   },
   "extensions": {
     "paper_writing": {
@@ -32,9 +32,16 @@
       "root": "skills",
       "preferred": ["markdown", "codex-skill"]
     },
-    "section_resources": {
-      "root": "section-resources",
-      "preferred": ["markdown", "json"]
+    "module_resources": {
+      "root": "<module>/skills|docs|files",
+      "preferred": ["codex-skill", "markdown", "json", "assets"],
+      "contract": {
+        "skills": "Each module keeps copied skills in <module>/skills/ so cloned agents can read them locally.",
+        "docs": "Each module keeps supporting docs in <module>/docs/.",
+        "files": "Each module keeps non-markdown companion files in <module>/files/.",
+        "links": "External design/code links live in <module>/links.json.",
+        "writing": "Writing resources are scoped per paper at writing/<writing_id>/skills|docs|files."
+      }
     }
   },
   "sync": {

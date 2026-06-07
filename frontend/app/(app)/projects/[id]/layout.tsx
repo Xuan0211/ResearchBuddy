@@ -8,6 +8,8 @@ const TABS = [
   { label: "Meetings", href: "meetings" },
   { label: "Docs", href: "docs" },
   { label: "Writing", href: "writing" },
+  { label: "Images", href: "images" },
+  { label: "Prototype", href: "prototype" },
   { label: "Skills", href: "skills" },
   { label: "Coding", href: "coding" },
   { label: "Workspace", href: "workspace" },
