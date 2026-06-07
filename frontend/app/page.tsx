@@ -3,11 +3,14 @@ import {
   ArrowRight,
   Bot,
   BookOpen,
+  CalendarDays,
   CheckCircle2,
   Cloud,
+  Database,
   FileText,
   FolderGit2,
   GitBranch,
+  HardDrive,
   Layers3,
   Sparkles,
   Users,
@@ -16,8 +19,8 @@ import {
 const promises = [
   {
     label: "01",
-    title: "Everyone works in the same context.",
-    text: "Project docs, module Skills, contacts, timelines, and writing rules are shared by humans and agents instead of being scattered across chats.",
+    title: "Humans and agents work from the same context.",
+    text: "Project docs, module Skills, contacts, timelines, and writing rules are shared by the whole team instead of being scattered across chats.",
     accent: "border-blue-200 bg-blue-50 text-blue-800",
   },
   {
@@ -28,14 +31,20 @@ const promises = [
   },
   {
     label: "03",
-    title: "Any agent can pick up the repo.",
-    text: "Clone the workspace locally, read the folder-level docs and Skills, make changes, then push them back through a git-like loop.",
+    title: "Agent-agnostic by design.",
+    text: "ResearchBuddy uses plain folders, docs, Skills, and git-style history, so different agents can clone the same workspace and work locally.",
     accent: "border-amber-200 bg-amber-50 text-amber-800",
   },
 ]
 
-const workflowTools = ["Google Drive", "Outlook", "Overleaf", "Figma", "GitHub", "Zotero"]
-const repoFolders = ["papers/", "writing/", "docs/", "skills/", "prototype/", "images/"]
+const workflowTools = [
+  { name: "Google Drive", icon: HardDrive },
+  { name: "Outlook", icon: CalendarDays },
+  { name: "Overleaf", icon: BookOpen },
+  { name: "Figma", icon: Layers3 },
+  { name: "GitHub", icon: GitBranch },
+  { name: "Zotero", icon: Database },
+]
 const steps = [
   {
     icon: BookOpen,
@@ -55,7 +64,7 @@ const steps = [
   {
     icon: Bot,
     title: "Let agents work locally",
-    text: "An agent clones the workspace, edits normal files, follows module conventions, and pushes back for review.",
+    text: "Any compatible agent clones the workspace, edits normal files, follows module conventions, and pushes back for review.",
   },
 ]
 
@@ -114,9 +123,11 @@ function WorkspaceCanvas() {
         <div className="flex items-center gap-2 text-sm font-semibold">
           <Cloud size={15} className="text-emerald-600" /> Existing tools
         </div>
-        <div className="mt-3 flex max-w-56 flex-wrap gap-2">
-          {workflowTools.map(item => (
-            <span key={item} className="rounded-full border bg-white px-2 py-1 text-[11px] text-gray-600">{item}</span>
+        <div className="mt-3 grid max-w-64 grid-cols-2 gap-2">
+          {workflowTools.map(({ name, icon: Icon }) => (
+            <span key={name} className="inline-flex items-center gap-1.5 rounded-md border bg-white px-2 py-1.5 text-[11px] text-gray-600 shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+              <Icon size={12} className="text-emerald-600" /> {name}
+            </span>
           ))}
         </div>
       </div>
@@ -186,21 +197,6 @@ export default function Home() {
               {promises.map(item => <PromiseCard key={item.label} item={item} />)}
             </div>
             <WorkspaceCanvas />
-          </div>
-        </div>
-      </section>
-
-      <section className="border-b bg-gray-950 py-4 text-white">
-        <div className="rb-marquee mx-auto flex max-w-7xl overflow-hidden px-6 text-sm">
-          <div className="rb-marquee-track flex min-w-full gap-3">
-            {[...workflowTools, ...repoFolders, "shared docs", "module Skills", "agent clone", "Drive sync"].map(item => (
-              <span key={item} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-white/85">{item}</span>
-            ))}
-          </div>
-          <div className="rb-marquee-track flex min-w-full gap-3" aria-hidden="true">
-            {[...workflowTools, ...repoFolders, "shared docs", "module Skills", "agent clone", "Drive sync"].map(item => (
-              <span key={item} className="rounded-full border border-white/15 bg-white/10 px-3 py-1 text-white/85">{item}</span>
-            ))}
           </div>
         </div>
       </section>

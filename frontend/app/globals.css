@@ -65,11 +65,6 @@ body {
   100% { transform: translate(250px, -110px); opacity: 0; }
 }
 
-@keyframes rbMarquee {
-  from { transform: translateX(0); }
-  to { transform: translateX(-100%); }
-}
-
 .rb-hero-grid {
   background-image:
     linear-gradient(#e5e7eb 1px, transparent 1px),
@@ -155,15 +150,10 @@ body {
   animation: rbFlowC 4.2s ease-in-out infinite;
 }
 
-.rb-marquee-track {
-  animation: rbMarquee 26s linear infinite;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .rb-rise,
   .rb-float,
-  .rb-flow-dot,
-  .rb-marquee-track {
+  .rb-flow-dot {
     animation: none;
   }
 }
