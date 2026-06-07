@@ -33,3 +33,137 @@ body {
 .animate-in.slide-in-from-right {
   animation: slideInFromRight 0.2s ease-out;
 }
+
+@keyframes rbFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes rbRise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes rbFlowA {
+  0% { transform: translate(0, 0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translate(210px, 120px); opacity: 0; }
+}
+
+@keyframes rbFlowB {
+  0% { transform: translate(0, 0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translate(-190px, 115px); opacity: 0; }
+}
+
+@keyframes rbFlowC {
+  0% { transform: translate(0, 0); opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { transform: translate(250px, -110px); opacity: 0; }
+}
+
+@keyframes rbMarquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
+.rb-hero-grid {
+  background-image:
+    linear-gradient(#e5e7eb 1px, transparent 1px),
+    linear-gradient(90deg, #e5e7eb 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: linear-gradient(to bottom, black, transparent 84%);
+  opacity: 0.55;
+}
+
+.rb-grid-bg {
+  background-image:
+    linear-gradient(#dbeafe 1px, transparent 1px),
+    linear-gradient(90deg, #dbeafe 1px, transparent 1px);
+  background-size: 34px 34px;
+  opacity: 0.6;
+}
+
+.rb-rise {
+  animation: rbRise 0.7s ease both;
+}
+
+.rb-float {
+  animation: rbFloat 5.6s ease-in-out infinite;
+}
+
+.rb-delay-1 { animation-delay: 0.4s; }
+.rb-delay-2 { animation-delay: 0.8s; }
+.rb-delay-3 { animation-delay: 1.2s; }
+
+.rb-flow-line {
+  position: absolute;
+  height: 1px;
+  background: #93c5fd;
+  opacity: 0.72;
+  transform-origin: left center;
+}
+
+.rb-flow-line-a {
+  left: 245px;
+  top: 170px;
+  width: 150px;
+  transform: rotate(29deg);
+}
+
+.rb-flow-line-b {
+  right: 250px;
+  top: 170px;
+  width: 155px;
+  transform: rotate(151deg);
+}
+
+.rb-flow-line-c {
+  left: 260px;
+  bottom: 150px;
+  width: 190px;
+  transform: rotate(-24deg);
+}
+
+.rb-flow-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: #2563eb;
+  box-shadow: 0 0 0 6px rgba(37, 99, 235, 0.12);
+}
+
+.rb-flow-dot-a {
+  left: 245px;
+  top: 166px;
+  animation: rbFlowA 3.4s ease-in-out infinite;
+}
+
+.rb-flow-dot-b {
+  right: 250px;
+  top: 166px;
+  animation: rbFlowB 3.8s ease-in-out infinite;
+}
+
+.rb-flow-dot-c {
+  left: 250px;
+  bottom: 145px;
+  animation: rbFlowC 4.2s ease-in-out infinite;
+}
+
+.rb-marquee-track {
+  animation: rbMarquee 26s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rb-rise,
+  .rb-float,
+  .rb-flow-dot,
+  .rb-marquee-track {
+    animation: none;
+  }
+}
