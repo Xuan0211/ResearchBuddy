@@ -1,14 +1,16 @@
 import re
+import secrets
 import uuid
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from ..core.config import settings
 from ..core.db import get_session
 from ..core.security import get_current_user
-from ..models import User
+from ..models import DocumentShare, Project, User
 from ..services import document_tabs as dt
 from ..services import frontmatter as fm
 from ..services.project_fs import list_project_dir, read_project_file, project_worktree
@@ -16,6 +18,7 @@ from .projects import check_member
 from .papers import _parse_paper
 
 router = APIRouter(prefix="/projects/{project_id}/docs", tags=["documents"])
+public_router = APIRouter(prefix="/public/docs", tags=["public-documents"])
 logger = logging.getLogger(__name__)
 
 WIKI_LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
@@ -75,6 +78,32 @@ class DriveSyncIn(BaseModel):
     mode: str = "mapped"  # "mapped" | "new" | "existing"
     drive_url: str = ""
     file_id: str = ""
+
+
+def _share_public_url(token: str) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/share/docs/{token}"
+
+
+def _current_share(session: Session, project_id: str, doc_id: str) -> DocumentShare | None:
+    project_uuid = uuid.UUID(project_id)
+    return session.exec(
+        select(DocumentShare).where(
+            DocumentShare.project_id == project_uuid,
+            DocumentShare.doc_id == doc_id,
+            DocumentShare.enabled == True,  # noqa: E712
+        )
+    ).first()
+
+
+def _share_payload(share: DocumentShare | None) -> dict:
+    if not share:
+        return {"enabled": False, "token": "", "url": ""}
+    return {
+        "enabled": share.enabled,
+        "token": share.token,
+        "url": _share_public_url(share.token),
+        "created_at": share.created_at,
+    }
 
 
 def _drive_http_exception(operation: str, exc: Exception, **context: object) -> HTTPException:
@@ -170,6 +199,66 @@ def get_doc(
         return _parse_doc(project_id, f"docs/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
+
+
+@router.get("/{doc_id}/share")
+def get_doc_share(
+    project_id: str,
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    try:
+        _parse_doc(project_id, f"docs/{doc_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+    return _share_payload(_current_share(session, project_id, doc_id))
+
+
+@router.post("/{doc_id}/share")
+def create_doc_share(
+    project_id: str,
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    try:
+        _parse_doc(project_id, f"docs/{doc_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+
+    existing = _current_share(session, project_id, doc_id)
+    if existing:
+        return _share_payload(existing)
+
+    share = DocumentShare(
+        project_id=uuid.UUID(project_id),
+        doc_id=doc_id,
+        token=secrets.token_urlsafe(24),
+        created_by=current_user.id,
+    )
+    session.add(share)
+    session.commit()
+    session.refresh(share)
+    return _share_payload(share)
+
+
+@router.delete("/{doc_id}/share")
+def disable_doc_share(
+    project_id: str,
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    share = _current_share(session, project_id, doc_id)
+    if share:
+        share.enabled = False
+        session.add(share)
+        session.commit()
+    return {"enabled": False, "token": "", "url": ""}
 
 
 @router.patch("/{doc_id}")
@@ -644,3 +733,36 @@ def get_doc_drive_link(
     if not mapping:
         return {"drive_link": None, "synced_at": None}
     return {"drive_link": mapping.drive_link, "synced_at": mapping.synced_at}
+
+
+@public_router.get("/{token}")
+def get_public_doc_share(
+    token: str,
+    session: Session = Depends(get_session),
+):
+    share = session.exec(
+        select(DocumentShare).where(
+            DocumentShare.token == token,
+            DocumentShare.enabled == True,  # noqa: E712
+        )
+    ).first()
+    if not share:
+        raise HTTPException(404, "Share link not found")
+
+    try:
+        doc = _parse_doc(str(share.project_id), f"docs/{share.doc_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404, "Shared document not found")
+
+    project = session.get(Project, share.project_id)
+    return {
+        "token": share.token,
+        "project": {
+            "id": str(share.project_id),
+            "name": project.name if project else "Shared project",
+        },
+        "document": {
+            k: v for k, v in doc.items() if k not in {"_path"}
+        },
+        "created_at": share.created_at,
+    }

@@ -76,6 +76,17 @@ class DriveFileMapping(SQLModel, table=True):
     synced_at: datetime = Field(default_factory=utcnow)
 
 
+class DocumentShare(SQLModel, table=True):
+    """Public read-only share token for one project document."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    project_id: UUID = Field(foreign_key="project.id", index=True)
+    doc_id: str = Field(index=True)
+    token: str = Field(unique=True, index=True)
+    created_by: UUID = Field(foreign_key="user.id")
+    enabled: bool = True
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class PaperImage(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     project_id: UUID = Field(foreign_key="project.id", index=True)

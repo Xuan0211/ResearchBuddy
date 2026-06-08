@@ -2,11 +2,17 @@
 import { useEffect, useState, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
-import { ArrowDown, ArrowUp, Download, Plus, RefreshCw, Trash2 } from "lucide-react"
+import { ArrowDown, ArrowUp, Check, Copy, Download, Plus, RefreshCw, Share2, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document, DocumentTab, Paper } from "@/lib/types"
 
 const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
+
+type ShareState = {
+  enabled: boolean
+  token: string
+  url: string
+}
 
 export default function DocDetailPage() {
   const { id: projectId, docId } = useParams<{ id: string; docId: string }>()
@@ -25,6 +31,16 @@ export default function DocDetailPage() {
   const [driveMode, setDriveMode] = useState<"mapped" | "new" | "existing">("mapped")
   const [driveTarget, setDriveTarget] = useState("")
   const [activeTabId, setActiveTabId] = useState("")
+  const [share, setShare] = useState<ShareState | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareBusy, setShareBusy] = useState(false)
+  const [copiedShare, setCopiedShare] = useState(false)
+
+  function localShareUrl(next: ShareState | null) {
+    if (!next?.token) return ""
+    if (typeof window === "undefined") return next.url
+    return `${window.location.origin}/share/docs/${next.token}`
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -33,12 +49,13 @@ export default function DocDetailPage() {
       setLoading(true)
       setLoadingMessage("Loading…")
       try {
-        const [initialDoc, ctx, driveRes] = await Promise.all([
+        const [initialDoc, ctx, driveRes, shareRes] = await Promise.all([
           api.get<Document & { _body: string }>(`/api/projects/${projectId}/docs/${docId}`),
           api.get<{ document: Document & { _body: string }; cited_papers: Paper[] }>(
             `/api/projects/${projectId}/docs/${docId}/context`
           ).catch(() => null),
           api.get<{ drive_link: string | null }>(`/api/projects/${projectId}/docs/${docId}/drive-link`).catch(() => null),
+          api.get<ShareState>(`/api/projects/${projectId}/docs/${docId}/share`).catch(() => null),
         ])
 
         let nextDoc = initialDoc
@@ -68,6 +85,7 @@ export default function DocDetailPage() {
         setTitleDraft(nextDoc.title)
         setActiveTabId(nextDoc.tabs?.[0]?.id ?? "main")
         setDriveLink(nextDriveLink)
+        if (shareRes) setShare(shareRes)
         if (ctx) setCited(ctx.cited_papers)
       } catch (err: any) {
         if (!cancelled) alert(err.message)
@@ -156,6 +174,41 @@ export default function DocDetailPage() {
     if (!confirm("Delete this document and move its linked Drive file to trash?")) return
     await api.delete(`/api/projects/${projectId}/docs/${docId}`)
     router.push(`/projects/${projectId}/docs`)
+  }
+
+  async function createShareLink() {
+    setShareBusy(true)
+    try {
+      const res = await api.post<ShareState>(`/api/projects/${projectId}/docs/${docId}/share`, {})
+      setShare(res)
+      setShareOpen(true)
+    } catch (err: any) {
+      alert(err.message)
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  async function disableShareLink() {
+    if (!confirm("Disable this public share link?")) return
+    setShareBusy(true)
+    try {
+      const res = await api.delete<ShareState>(`/api/projects/${projectId}/docs/${docId}/share`)
+      setShare(res)
+      setCopiedShare(false)
+    } catch (err: any) {
+      alert(err.message)
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  async function copyShareLink() {
+    const url = localShareUrl(share)
+    if (!url) return
+    await navigator.clipboard.writeText(url)
+    setCopiedShare(true)
+    setTimeout(() => setCopiedShare(false), 1800)
   }
 
   async function exportMarkdown() {
@@ -260,6 +313,64 @@ export default function DocDetailPage() {
                 <Download size={11} /> {pullingDrive ? "Pulling…" : "Pull"}
               </button>
             )}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setShareOpen(v => !v)
+                  if (!share?.enabled) createShareLink()
+                }}
+                disabled={shareBusy}
+                className="inline-flex items-center gap-1 text-xs text-gray-500 hover:text-black px-2 py-1 border rounded-lg disabled:opacity-50"
+              >
+                <Share2 size={11} /> Share
+              </button>
+              {shareOpen && (
+                <div className="absolute right-0 top-8 z-30 w-80 rounded-xl border bg-white p-3 shadow-xl">
+                  <div className="mb-2 flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs font-semibold text-gray-800">Public document link</p>
+                      <p className="mt-0.5 text-[11px] leading-4 text-gray-400">
+                        Anyone with this link can view this document without logging in.
+                      </p>
+                    </div>
+                    <button onClick={() => setShareOpen(false)} className="p-1 text-gray-300 hover:text-black">
+                      <X size={13} />
+                    </button>
+                  </div>
+                  {share?.enabled ? (
+                    <div className="space-y-2">
+                      <div className="rounded-lg border bg-gray-50 px-2 py-1.5 text-[11px] text-gray-600 truncate">
+                        {localShareUrl(share)}
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <button
+                          onClick={copyShareLink}
+                          className="inline-flex items-center gap-1.5 rounded-lg bg-black px-3 py-1.5 text-xs text-white"
+                        >
+                          {copiedShare ? <Check size={12} /> : <Copy size={12} />}
+                          {copiedShare ? "Copied" : "Copy link"}
+                        </button>
+                        <button
+                          onClick={disableShareLink}
+                          disabled={shareBusy}
+                          className="rounded-lg border px-3 py-1.5 text-xs text-red-500 hover:bg-red-50 disabled:opacity-50"
+                        >
+                          Disable
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={createShareLink}
+                      disabled={shareBusy}
+                      className="rounded-lg bg-black px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                    >
+                      {shareBusy ? "Creating…" : "Create share link"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
             <button onClick={deleteDoc}
               className="inline-flex items-center gap-1 text-xs text-red-500 hover:text-red-700 px-2 py-1 border border-red-100 rounded-lg">
               <Trash2 size={11} /> Delete
