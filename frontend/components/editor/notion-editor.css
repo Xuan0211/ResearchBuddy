@@ -108,7 +108,7 @@
 }
 
 .notion-editor .tiptap .wiki-link-decoration::after {
-  content: "@" attr(data-wiki-label);
+  content: attr(data-wiki-label);
   display: inline-flex;
   align-items: center;
   max-width: 20rem;

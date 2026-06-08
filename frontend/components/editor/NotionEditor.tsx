@@ -8,12 +8,61 @@ import Typography from "@tiptap/extension-typography"
 import Image from "@tiptap/extension-image"
 import Underline from "@tiptap/extension-underline"
 import { Markdown } from "tiptap-markdown"
+import { defaultMarkdownSerializer } from "prosemirror-markdown"
 import dynamic from "next/dynamic"
 import { WikiLinkExtension, type WikiSuggestionState } from "./WikiLinkExtension"
 import WikiLinkSuggestion from "./WikiLinkSuggestion"
 import "./notion-editor.css"
 
 const PaperPeekPanel = dynamic(() => import("../paper/PaperPeekPanel"), { ssr: false })
+
+function escapeHtmlAttr(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+}
+
+const ResizableImage = Image.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      width: {
+        default: null,
+        parseHTML: element => element.getAttribute("data-rb-width") || element.style.width || null,
+        renderHTML: attributes => {
+          if (!attributes.width) return {}
+          return {
+            "data-rb-width": attributes.width,
+            style: `width:${attributes.width};height:auto;`,
+          }
+        },
+      },
+    }
+  },
+
+  addStorage() {
+    return {
+      markdown: {
+        serialize(state: any, node: any, parent: any, index: number) {
+          const width = node.attrs.width
+          if (!width) {
+            defaultMarkdownSerializer.nodes.image(state, node, parent, index)
+            return
+          }
+          const src = escapeHtmlAttr(node.attrs.src || "")
+          const alt = escapeHtmlAttr(node.attrs.alt || "")
+          const title = node.attrs.title ? ` title="${escapeHtmlAttr(node.attrs.title)}"` : ""
+          const style = `width:${escapeHtmlAttr(width)};height:auto;`
+          state.write(`<img src="${src}" alt="${alt}"${title} data-rb-width="${escapeHtmlAttr(width)}" style="${style}">`)
+          state.closeBlock(node)
+        },
+        parse: {},
+      },
+    }
+  },
+})
 
 const ResearchBuddyAnnotation = Mark.create({
   name: "rbAnnotation",
@@ -100,7 +149,7 @@ export default function NotionEditor({
       Markdown.configure({ html: true, transformPastedText: true }),
       Placeholder.configure({ placeholder }),
       Typography,
-      Image.configure({ inline: false, allowBase64: false }),
+      ResizableImage.configure({ inline: false, allowBase64: false }),
       WikiLinkExtension(handleSuggestionState),
     ],
     content,
@@ -194,7 +243,7 @@ export default function NotionEditor({
   function handleSelectPaper(paper: { id: string }) {
     if (!editor) return
     const { from, to } = suggestionState.range
-    editor.chain().focus().deleteRange({ from, to }).insertContent(`[[${paper.id}]]`).run()
+    editor.chain().focus().deleteRange({ from, to }).insertContent(`[[${paper.id}]] `).run()
     setSuggestionState(s => ({ ...s, active: false }))
   }
 
@@ -211,6 +260,11 @@ export default function NotionEditor({
   function clearMarks() {
     if (!editor) return
     editor.chain().focus().unsetMark("rbAnnotation").unsetUnderline().run()
+  }
+
+  function setImageWidth(width: string) {
+    if (!editor) return
+    editor.chain().focus().updateAttributes("image", { width }).run()
   }
 
   return (
@@ -246,6 +300,28 @@ export default function NotionEditor({
             className="rounded-md border px-2 py-1 text-xs text-gray-500 hover:bg-gray-50">
             Clear
           </button>
+          <span className="mx-1 h-5 w-px bg-gray-200" />
+          <span className="px-1 text-[11px] font-medium text-gray-400">Image</span>
+          {[
+            ["35%", "S"],
+            ["55%", "M"],
+            ["75%", "L"],
+            ["100%", "Full"],
+          ].map(([width, label]) => (
+            <button
+              key={width}
+              type="button"
+              onClick={() => setImageWidth(width)}
+              disabled={!editor.isActive("image")}
+              className={`rounded-md border px-2 py-1 text-xs ${
+                editor.isActive("image") && editor.getAttributes("image").width === width
+                  ? "bg-gray-950 text-white"
+                  : "text-gray-600 hover:bg-gray-50 disabled:opacity-35 disabled:hover:bg-white"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       )}
       <EditorContent editor={editor} className="notion-editor" />
