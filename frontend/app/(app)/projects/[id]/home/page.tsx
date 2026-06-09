@@ -547,20 +547,36 @@ export default function HomePage() {
   const docOptions = buildDocOptions(docs)
   const docTree = buildDocTree(docOptions)
   const docById = new Map(docOptions.map(doc => [doc.id, doc]))
-  const peopleEntries: [string, PersonOption][] = [
-    ...contacts.map(c => [c.handle, {
-      value: c.handle,
-      label: c.name || c.handle,
-      search: `${c.name} ${c.handle} ${c.email}`.toLowerCase(),
-    }] as [string, PersonOption]),
-    ...members.filter(m => m.status === "active").map(m => [m.email, {
-      value: m.email,
-      label: m.name || m.email.split("@", 1)[0],
-      search: `${m.name} ${m.email}`.toLowerCase(),
-    }] as [string, PersonOption]),
-  ]
-  const peopleOptions = Array.from(new Map(peopleEntries).values())
-  const personByValue = new Map(peopleOptions.map(person => [person.value, person]))
+  const peopleOptions: PersonOption[] = []
+  const personLookupEntries: [string, PersonOption][] = []
+  const seenPeopleKeys = new Set<string>()
+
+  function pushPerson(value: string, label: string, search: string, aliases: string[]) {
+    const keys = Array.from(new Set([value, label, ...aliases].map(item => item.trim().toLowerCase()).filter(Boolean)))
+    if (!value.trim() || keys.some(key => seenPeopleKeys.has(key))) {
+      const existing = keys.map(key => personLookupEntries.find(([alias]) => alias === key)?.[1]).find(Boolean)
+      if (existing) {
+        keys.forEach(key => personLookupEntries.push([key, existing]))
+      }
+      return
+    }
+    const option = { value, label, search: search.toLowerCase() }
+    keys.forEach(key => {
+      seenPeopleKeys.add(key)
+      personLookupEntries.push([key, option])
+    })
+    peopleOptions.push(option)
+  }
+
+  contacts.forEach(c => {
+    pushPerson(c.handle, c.name || c.handle, `${c.name} ${c.handle} ${c.email}`, [c.email, c.handle, c.name])
+  })
+  members.filter(m => m.status === "active").forEach(m => {
+    const label = m.name || m.email.split("@", 1)[0]
+    pushPerson(m.email, label, `${m.name} ${m.email}`, [m.email, label])
+  })
+
+  const personByValue = new Map(personLookupEntries)
 
   function floatingStyle(x: number, y: number, width: number, height: number): CSSProperties {
     if (typeof window === "undefined") return { left: x + 12, top: y + 12 }
@@ -607,7 +623,8 @@ export default function HomePage() {
   }
 
   function personLabel(value: string) {
-    return personByValue.get(value)?.label || value.replace(/^@/, "").split("@", 1)[0]
+    const person = personByValue.get(value) || personByValue.get(value.trim().toLowerCase())
+    return person?.label || value.replace(/^@/, "").split("@", 1)[0]
   }
 
   return (
@@ -859,7 +876,7 @@ export default function HomePage() {
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</span>
                 <div className="mt-1 flex flex-wrap gap-1.5">
                   {timelineEditor.mentions.map(value => {
-                    const person = personByValue.get(value)
+                    const person = personByValue.get(value) || personByValue.get(value.trim().toLowerCase())
                     return (
                       <span key={value} className="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-700">
                         <span className="truncate">{person?.label || value.replace(/^@/, "")}</span>
