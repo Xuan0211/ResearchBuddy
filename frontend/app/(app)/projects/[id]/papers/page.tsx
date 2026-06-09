@@ -16,6 +16,7 @@ export default function PapersPage() {
   const [arxivInput, setArxivInput] = useState("")
   const [importing, setImporting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [exportingBib, setExportingBib] = useState(false)
   const [syncMsg, setSyncMsg] = useState("")
   const [showZoteroConfig, setShowZoteroConfig] = useState(false)
 
@@ -111,6 +112,26 @@ export default function PapersPage() {
     }
   }
 
+  async function exportBibtex() {
+    setExportingBib(true)
+    setSyncMsg("")
+    try {
+      const blob = await api.download(`/api/projects/${projectId}/papers/export/bib`)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "library.bib"
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err: any) {
+      setSyncMsg(err.message || "Could not export BibTeX")
+    } finally {
+      setExportingBib(false)
+    }
+  }
+
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
 
   return (
@@ -186,11 +207,14 @@ export default function PapersPage() {
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400" />
               )}
             </button>
-            <a href={`${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"}/api/projects/${projectId}/papers/export/bib`}
-               title="Export BibTeX library" download="library.bib"
-               className="p-1.5 rounded border hover:bg-gray-50 text-gray-600 flex items-center">
-              <Download size={14} />
-            </a>
+            <button
+              onClick={exportBibtex}
+              disabled={exportingBib}
+              title="Export BibTeX library"
+              className="p-1.5 rounded border hover:bg-gray-50 text-gray-600 flex items-center disabled:opacity-50"
+            >
+              <Download size={14} className={exportingBib ? "animate-pulse" : ""} />
+            </button>
             <button onClick={() => setShowZoteroConfig(true)} title="Zotero settings"
               className="p-1.5 rounded border hover:bg-gray-50 text-gray-600">
               <Settings size={14} />
