@@ -37,7 +37,8 @@ class GanttItem(BaseModel):
     title: str
     start: str          # ISO date "YYYY-MM-DD"
     end: str            # ISO date "YYYY-MM-DD"
-    doc_id: str = ""    # link to a doc
+    doc_id: str = ""    # legacy single doc link
+    doc_ids: list[str] = []  # linked docs
     mentions: list[str] = []  # @handles
     note: str = ""
 
