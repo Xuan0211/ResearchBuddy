@@ -11,6 +11,10 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..core.db import get_session
+from ..core.paths import (
+    DOCS_DIR, MEETINGS_DIR,
+    HOME_SETTINGS_PATH, PROJECT_INFO_DIR, SCHEMA_VERSION,
+)
 from ..core.security import get_current_user
 from ..models import DriveFileMapping, User, Project, ProjectInvite, ProjectMember
 from ..services import git_service
@@ -117,9 +121,6 @@ def project_response(project: Project, role: str) -> dict:
     }
 
 
-HOME_SETTINGS_PATH = ".researchbuddy/home-settings.json"
-
-
 def _load_home_settings(project_id: str) -> dict:
     try:
         data = json.loads(read_project_file(project_id, HOME_SETTINGS_PATH))
@@ -132,9 +133,12 @@ def _load_home_settings(project_id: str) -> dict:
 
 
 def _save_home_settings(project_id: str, body: HomeSettingsIn) -> dict:
+    try:
+        existing = json.loads(read_project_file(project_id, HOME_SETTINGS_PATH))
+    except Exception:
+        existing = {}
     data = {
-        "schema": "researchbuddy.home-settings",
-        "version": "0.1",
+        **existing,
         "countdown_title": body.countdown_title.strip(),
         "countdown_target": body.countdown_target.strip(),
     }
@@ -147,6 +151,29 @@ def _save_home_settings(project_id: str, body: HomeSettingsIn) -> dict:
         "countdown_title": data["countdown_title"],
         "countdown_target": data["countdown_target"],
     }
+
+
+def _init_project_info(project_id: str, project_name: str) -> None:
+    """Write project_info/manifest.read_only.json and team.read_only.json after repo init."""
+    from datetime import datetime, timezone
+    manifest = {
+        "schema": "researchbuddy.project.manifest",
+        "version": SCHEMA_VERSION,
+        "name": project_name,
+        "description": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    team = {
+        "schema": "researchbuddy.project.team",
+        "version": SCHEMA_VERSION,
+        "members": [],
+    }
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Initialize project info"
+        info_dir = wt / PROJECT_INFO_DIR
+        info_dir.mkdir(parents=True, exist_ok=True)
+        (wt / HOME_SETTINGS_PATH).write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        (info_dir / "team.read_only.json").write_text(json.dumps(team, indent=2), encoding="utf-8")
 
 
 def _parse_markdown_item(project_id: str, rel_path: str) -> tuple[dict, str]:
@@ -272,6 +299,7 @@ def create_project(
 
     repo_path = git_service.init_project_repo(str(project.id))
     project.repo_path = str(repo_path)
+    _init_project_info(str(project.id), body.name)
 
     member = ProjectMember(project_id=project.id, user_id=current_user.id, role="admin")
     session.add(member)
@@ -469,7 +497,7 @@ def batch_drive_sync(
                 session=session,
                 project_id=project_id,
                 folder_id=docs_folder,
-                rel_dir="docs",
+                rel_dir=DOCS_DIR,
                 item_type="doc",
                 mode=body.mode,
             )
@@ -481,7 +509,7 @@ def batch_drive_sync(
                 session=session,
                 project_id=project_id,
                 folder_id=meetings_folder,
-                rel_dir="meetings",
+                rel_dir=MEETINGS_DIR,
                 item_type="meeting",
                 mode=body.mode,
             )

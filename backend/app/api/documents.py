@@ -9,6 +9,7 @@ from sqlmodel import Session, select
 
 from ..core.config import settings
 from ..core.db import get_session
+from ..core.paths import DOCS_DIR, PAPERS_NOTES_DIR
 from ..core.security import get_current_user
 from ..models import DocumentShare, Project, User
 from ..services import document_tabs as dt
@@ -151,11 +152,11 @@ def list_docs(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session)
-    paths = list_project_dir(project_id, "docs")
+    paths = list_project_dir(project_id, DOCS_DIR)
     docs = []
     for p in paths:
         parts = p.split("/")
-        if not p.endswith(".md") or (len(parts) > 1 and parts[1] in {"docs", "skills", "files"}):
+        if not p.endswith(".md") or len(parts) != 3:
             continue
         try:
             d = _parse_doc(project_id, p)
@@ -180,7 +181,8 @@ def create_doc(
         meta["folder"] = body.folder
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Create doc: {body.title}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             raise HTTPException(409, "Document already exists")
         fm.write(path, meta, dt.serialize_tabs([{"id": "main", "title": "Main", "content": f"# {body.title}\n"}]))
@@ -196,7 +198,7 @@ def get_doc(
 ):
     check_member(project_id, current_user, session)
     try:
-        return _parse_doc(project_id, f"docs/{doc_id}.md")
+        return _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -210,7 +212,7 @@ def get_doc_share(
 ):
     check_member(project_id, current_user, session)
     try:
-        _parse_doc(project_id, f"docs/{doc_id}.md")
+        _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
     return _share_payload(_current_share(session, project_id, doc_id))
@@ -225,7 +227,7 @@ def create_doc_share(
 ):
     check_member(project_id, current_user, session, min_role="member")
     try:
-        _parse_doc(project_id, f"docs/{doc_id}.md")
+        _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -272,7 +274,7 @@ def update_doc(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Update doc: {doc_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
             raise HTTPException(404)
         if body.content is not None:
@@ -311,7 +313,7 @@ def create_doc_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Create doc tab: {doc_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -336,7 +338,7 @@ def update_doc_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Update doc tab: {doc_id}/{tab_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -370,7 +372,7 @@ def delete_doc_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Delete doc tab: {doc_id}/{tab_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -418,7 +420,7 @@ def delete_doc(
 
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Delete doc: {doc_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
             raise HTTPException(404)
         path.unlink()
@@ -433,7 +435,7 @@ def get_doc_context(
 ):
     check_member(project_id, current_user, session)
     try:
-        doc = _parse_doc(project_id, f"docs/{doc_id}.md")
+        doc = _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -441,7 +443,7 @@ def get_doc_context(
     cited_papers = []
     for pid in paper_ids:
         try:
-            cited_papers.append(_parse_paper(project_id, f"papers/{pid}.md"))
+            cited_papers.append(_parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{pid}.md"))
         except FileNotFoundError:
             cited_papers.append({"id": pid, "error": "not found"})
 
@@ -463,7 +465,7 @@ def export_doc_markdown(
     from fastapi.responses import Response
     check_member(project_id, current_user, session)
     try:
-        content = read_project_file(project_id, f"docs/{doc_id}.md")
+        content = read_project_file(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
     return Response(
@@ -493,7 +495,6 @@ async def sync_doc_to_drive(
 
     body = body or DriveSyncIn()
 
-    # Check if file already synced
     mapping = session.exec(
         sel(DriveFileMapping).where(
             DriveFileMapping.project_id == project_id,
@@ -516,7 +517,7 @@ async def sync_doc_to_drive(
 
     doc_folder = ""
     try:
-        meta = _parse_doc(project_id, f"docs/{doc_id}.md")
+        meta = _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
         doc_folder = meta.get("folder", "")
         result = drive_doc_sync.push_doc_to_drive(
             session,
@@ -664,7 +665,6 @@ async def sync_doc_structure_from_drive(
     project = session.get(Project, project_id)
     service = gd.get_service(token, str(current_user.id), session)
 
-    # Get the Docs root folder id
     docs_root_id = gd.ensure_project_drive_child_folder(service, project_id, project.name, "Docs")
 
     mappings = session.exec(
@@ -691,8 +691,7 @@ async def sync_doc_structure_from_drive(
                     fileId=parent_id, fields="id,name"
                 ).execute()
                 new_folder = parent_info.get("name", "")
-            # Update local doc
-            path_str = f"docs/{mapping.item_id}.md"
+            path_str = f"{DOCS_DIR}/{mapping.item_id}.md"
             try:
                 with project_worktree(project_id) as wt:
                     p = wt / path_str
@@ -750,7 +749,7 @@ def get_public_doc_share(
         raise HTTPException(404, "Share link not found")
 
     try:
-        doc = _parse_doc(str(share.project_id), f"docs/{share.doc_id}.md")
+        doc = _parse_doc(str(share.project_id), f"{DOCS_DIR}/{share.doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404, "Shared document not found")
 

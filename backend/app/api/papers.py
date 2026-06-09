@@ -7,6 +7,10 @@ from sqlmodel import Session, select
 
 from ..core.config import settings
 from ..core.db import get_session
+from ..core.paths import (
+    PAPERS_NOTES_DIR, DOCS_DIR,
+    WRITING_BASE, WRITING_MANIFEST, WRITING_AI_BIB, WRITING_REFS_BIB,
+)
 from ..core.security import get_current_user
 from ..models import PaperImage, User
 from ..services import frontmatter as fm
@@ -36,7 +40,6 @@ def _generate_bibtex(meta: dict) -> str:
     venue_field = "booktitle" if is_proceedings else "journal"
 
     authors_raw = meta.get("authors", [])
-    # Convert "Last, First" → "First Last" for bibtex "and" joining
     def fmt(a):
         if "," in a:
             parts = [p.strip() for p in a.split(",", 1)]
@@ -110,11 +113,11 @@ def _list_all_papers(project_id: str) -> list[dict]:
     if cached is not None:
         return cached
 
-    paths = list_project_dir(project_id, "papers")
+    paths = list_project_dir(project_id, PAPERS_NOTES_DIR)
     papers = []
     for p in paths:
         parts = p.split("/")
-        if not p.endswith(".md") or len(parts) != 2:
+        if not p.endswith(".md") or len(parts) != 3:
             continue
         try:
             meta = _parse_paper(project_id, p)
@@ -133,7 +136,6 @@ def _list_all_papers(project_id: str) -> list[dict]:
         if zk not in seen:
             seen[zk] = p
         else:
-            # Prefer the one with more content (notes)
             existing_body = seen[zk].get("_body", "")
             new_body = p.get("_body", "")
             if len(new_body.strip()) > len(existing_body.strip()):
@@ -223,7 +225,8 @@ async def create_paper(
 
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Add paper: {body.get('title', paper_id)}"
-        paper_path = wt / "papers" / f"{paper_id}.md"
+        paper_path = wt / PAPERS_NOTES_DIR / f"{paper_id}.md"
+        paper_path.parent.mkdir(parents=True, exist_ok=True)
         if paper_path.exists():
             raise HTTPException(409, "Paper already exists")
         body.setdefault("links", {"zotero": "", "arxiv": "", "url": "", "google_drive_pdf": ""})
@@ -245,7 +248,7 @@ def get_paper(
 ):
     check_member(project_id, current_user, session)
     try:
-        meta = _parse_paper(project_id, f"papers/{paper_id}.md")
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
         return _paper_public(meta)
     except FileNotFoundError:
         raise HTTPException(404, "Paper not found")
@@ -262,7 +265,7 @@ def update_paper(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Update paper: {paper_id}"
-        paper_path = wt / "papers" / f"{paper_id}.md"
+        paper_path = wt / PAPERS_NOTES_DIR / f"{paper_id}.md"
         if not paper_path.exists():
             raise HTTPException(404)
         notes = body.pop("notes", None)
@@ -311,7 +314,7 @@ async def upload_image(
     url = f"/api/images/{filename}"
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Add preview image: {paper_id}"
-        paper_path = wt / "papers" / f"{paper_id}.md"
+        paper_path = wt / PAPERS_NOTES_DIR / f"{paper_id}.md"
         if paper_path.exists():
             fm.update_metadata(paper_path, {"preview_image": url})
 
@@ -328,12 +331,12 @@ def get_paper_refs(
 ):
     """Documents that cite [[paper_id]]."""
     check_member(project_id, current_user, session)
-    doc_paths = list_project_dir(project_id, "docs")
+    doc_paths = list_project_dir(project_id, DOCS_DIR)
     refs = []
     wiki_re = re.compile(r"\[\[([^\]]+)\]\]")
     for p in doc_paths:
         parts = p.split("/")
-        if not p.endswith(".md") or (len(parts) > 1 and parts[1] in {"docs", "skills", "files"}):
+        if not p.endswith(".md") or len(parts) != 3:
             continue
         try:
             import frontmatter as _fm
@@ -365,7 +368,7 @@ async def sync_paper_to_zotero(
         raise HTTPException(400, "Zotero not configured for this project")
 
     try:
-        meta = _parse_paper(project_id, f"papers/{paper_id}.md")
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -416,9 +419,8 @@ async def sync_paper_to_zotero(
         if patch_body.get("extra") is not None:
             msgs.append("updated Extra links")
 
-        # ── 2. Write notes as a Zotero child note (never touches parent item) ─
+        # ── 2. Write notes as a Zotero child note ────────────────────────────
         if notes_body:
-            # Check if we already have a child note from ResearchBuddy
             notes_resp = await client.get(
                 f"{base}/items/{zotero_key}/children",
                 headers=headers,
@@ -459,7 +461,7 @@ def get_paper_context(
     """AI-friendly: full metadata + bibtex + notes body."""
     check_member(project_id, current_user, session)
     try:
-        meta = _parse_paper(project_id, f"papers/{paper_id}.md")
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
     return {
@@ -487,7 +489,7 @@ async def sync_notes_to_drive(
         raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
 
     try:
-        meta = _parse_paper(project_id, f"papers/{paper_id}.md")
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -554,17 +556,18 @@ def list_ai_papers(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session)
-    writing_paths = list_project_dir(project_id, "writing")
+    writing_paths = list_project_dir(project_id, WRITING_BASE)
     all_entries: list[dict] = []
     seen_writing_dirs: set[str] = set()
     for p in writing_paths:
         parts = p.split("/")
-        if len(parts) < 2:
+        # Expected: writing/Project/{id}/bibs/ai_generated.bib
+        if not p.endswith(f"/{WRITING_AI_BIB}"):
             continue
-        writing_id = parts[1]
+        if len(parts) < 3:
+            continue
+        writing_id = parts[2]
         if writing_id in seen_writing_dirs:
-            continue
-        if not p.endswith("ai-generated.bib"):
             continue
         seen_writing_dirs.add(writing_id)
         try:
@@ -592,12 +595,12 @@ def add_ai_paper(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session, min_role="member")
-    bib_path = f"writing/{body.writing_id}/ai-generated.bib"
+    bib_path = f"{WRITING_BASE}/{body.writing_id}/{WRITING_AI_BIB}"
     with project_worktree(project_id) as wt:
         wt.commit_message = "Add AI-generated reference"
         path = wt / bib_path
         if not path.exists():
-            raise HTTPException(404, f"ai-generated.bib not found in writing/{body.writing_id}")
+            raise HTTPException(404, f"{WRITING_AI_BIB} not found in writing project {body.writing_id}")
         existing = path.read_text(encoding="utf-8")
         path.write_text(existing.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
     return {"ok": True}
@@ -615,11 +618,11 @@ def confirm_ai_paper(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Move a BibTeX entry from ai-generated.bib to reference.bib (local confirmation).
+    """Move a BibTeX entry from ai_generated.bib to references.read_only.bib (local confirmation).
     Full Zotero sync must be done separately via the Zotero integration."""
     check_member(project_id, current_user, session, min_role="member")
-    ai_path = f"writing/{body.writing_id}/ai-generated.bib"
-    ref_path = f"writing/{body.writing_id}/reference.bib"
+    ai_path = f"{WRITING_BASE}/{body.writing_id}/{WRITING_AI_BIB}"
+    ref_path = f"{WRITING_BASE}/{body.writing_id}/{WRITING_REFS_BIB}"
 
     try:
         ai_text = read_project_file(project_id, ai_path)
@@ -627,13 +630,12 @@ def confirm_ai_paper(
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
 
-    # Find and extract the entry
     pattern = re.compile(
         rf"(@\w+\{{{re.escape(body.key)},.*?\n\}})", re.DOTALL
     )
     m = pattern.search(ai_text)
     if not m:
-        raise HTTPException(404, f"Key '{body.key}' not found in ai-generated.bib")
+        raise HTTPException(404, f"Key '{body.key}' not found in ai_generated.bib")
 
     entry_text = m.group(1)
     new_ai_text = pattern.sub("", ai_text).strip() + "\n"

@@ -5,6 +5,7 @@ import httpx
 
 from . import frontmatter as fm
 from .project_fs import project_worktree
+from ..core.paths import PAPERS_NOTES_DIR
 
 ZOTERO_API = "https://api.zotero.org"
 RB_ARXIV_EXTRA_PREFIX = "ResearchBuddy ArXiv:"
@@ -200,8 +201,8 @@ async def sync_project(
     created = updated = skipped = 0
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Zotero sync: {len(items)} items"
-        papers_dir = wt / "papers"
-        papers_dir.mkdir(exist_ok=True)
+        papers_dir = wt / PAPERS_NOTES_DIR
+        papers_dir.mkdir(parents=True, exist_ok=True)
 
         # Build index: zotero_key → existing file path (to handle renamed/duplicate files)
         existing_by_zotero_key: dict[str, Path] = {}

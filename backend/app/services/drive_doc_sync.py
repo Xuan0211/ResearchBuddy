@@ -10,6 +10,7 @@ import frontmatter as frontmatter_lib
 from sqlmodel import Session, select
 
 from ..core.db import engine
+from ..core.paths import DOCS_DIR
 from ..models import DriveFileMapping, Project
 from . import document_tabs as dt
 from . import frontmatter as fm
@@ -46,7 +47,7 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 def _parse_doc(project_id: str, doc_id: str) -> dict:
-    rel_path = f"docs/{doc_id}.md"
+    rel_path = f"{DOCS_DIR}/{doc_id}.md"
     content = read_project_file(project_id, rel_path)
     post = frontmatter_lib.loads(content)
     meta = dict(post.metadata)
@@ -70,7 +71,7 @@ def _mapping_for_doc(session: Session, project_id: str, doc_id: str) -> DriveFil
 
 
 def _local_doc_modified(project_id: str, doc_id: str) -> datetime | None:
-    return _aware(file_last_commit_time(project_id, f"docs/{doc_id}.md"))
+    return _aware(file_last_commit_time(project_id, f"{DOCS_DIR}/{doc_id}.md"))
 
 
 def _merge_local_images_into_pulled_tabs(
@@ -150,9 +151,9 @@ def pull_doc_from_drive(
     next_content = _pull_tabs_from_drive(session, token, user_id, project_id, doc_id, mapping)
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Pull doc from Drive: {doc_id}"
-        path = wt / "docs" / f"{doc_id}.md"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
         if not path.exists():
-            raise FileNotFoundError(f"docs/{doc_id}.md")
+            raise FileNotFoundError(f"{DOCS_DIR}/{doc_id}.md")
         meta, _ = fm.read(path)
         meta["papers"] = _extract_paper_refs(next_content)
         meta["mentions"] = _extract_mentions(next_content)

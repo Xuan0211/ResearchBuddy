@@ -24,21 +24,15 @@ Identify:
 - **Domain** (HCI, ML, systems, social science, etc.)
 
 ### Step 2 — Search project papers first
-1. Read all papers in `papers/` that have relevant tags
+1. Read all papers in `papers/notes/` that have relevant tags
 2. Check paper notes for mentions of the claim
-3. Use `[[paper_id]]` references already present in `docs/`
-
-**Pattern for finding relevant notes:**
-```
-Read papers/ where tags contain [topic keywords]
-Look for: methodology, findings, conclusions relevant to the claim
-```
+3. Use `[[paper_id]]` references already present in `document/docs/`
 
 ### Step 3 — Search externally if needed
 If no project paper supports the claim:
 1. Search ArXiv / Google Scholar for the claim + keywords
 2. Add promising papers to the project (via ArXiv import)
-3. For AI-suggested papers, add to `ai-generated.bib` using `\aicite{key}`
+3. For AI-suggested papers, add to `bibs/ai_generated.bib` using `\aicite{key}`
 
 ### Step 4 — Output format
 

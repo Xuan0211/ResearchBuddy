@@ -1,6 +1,7 @@
 import json
 import re
 from datetime import date as date_type, date, timedelta
+from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,6 +10,7 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from ..core.db import get_session
+from ..core.paths import MEETINGS_DIR, MEETING_SETTINGS_PATH, MTGLOG_PATH
 from ..core.security import get_current_user
 from ..models import User
 from ..services.contacts import list_contacts
@@ -39,9 +41,6 @@ MEETING_TABS = [
 
 MEETING_TEMPLATE = dt.serialize_tabs(MEETING_TABS, "Pre-meeting")
 
-
-MEETING_SETTINGS_PATH = ".researchbuddy/meeting-settings.json"
-
 WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
@@ -69,6 +68,37 @@ def _save_meeting_settings(project_id: str, settings: MeetingSettings) -> None:
         settings_path = wt / MEETING_SETTINGS_PATH
         settings_path.parent.mkdir(parents=True, exist_ok=True)
         settings_path.write_text(json.dumps(settings.model_dump(), indent=2), encoding="utf-8")
+
+
+def _rebuild_mtglog_in_worktree(wt) -> None:
+    """Rebuild meetings/mtglog.json from current worktree meeting files."""
+    root = Path(str(wt))
+    meetings_dir = root / MEETINGS_DIR
+    if not meetings_dir.exists():
+        return
+    entries = []
+    for md_file in sorted(meetings_dir.glob("*.md"), reverse=True):
+        try:
+            import frontmatter as _fm
+            content = md_file.read_text(encoding="utf-8")
+            post = _fm.loads(content)
+            m = dict(post.metadata)
+            entries.append({
+                "id": m.get("id", ""),
+                "date": str(m.get("date", "")),
+                "title": m.get("title", ""),
+                "drive_link": (m.get("links") or {}).get("google_drive", ""),
+            })
+        except Exception:
+            continue
+    data = {
+        "schema": "researchbuddy.meetings.mtglog",
+        "version": "2.0",
+        "entries": entries,
+    }
+    mtglog_path = root / MTGLOG_PATH
+    mtglog_path.parent.mkdir(parents=True, exist_ok=True)
+    mtglog_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _next_weekday_date(weekday: int) -> date:
@@ -307,11 +337,11 @@ def list_meetings(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session)
-    paths = list_project_dir(project_id, "meetings")
+    paths = list_project_dir(project_id, MEETINGS_DIR)
     meetings = []
     for p in sorted(paths, reverse=True):
         parts = p.split("/")
-        if not p.endswith(".md") or len(parts) != 2:
+        if not p.endswith(".md") or len(parts) != 3:
             continue
         try:
             m = _parse_meeting(project_id, p)
@@ -319,7 +349,6 @@ def list_meetings(
         except Exception:
             continue
 
-    # Compute next_meeting_date from recurring settings
     settings = _load_meeting_settings(project_id)
     next_date = None
     if settings.recurring_weekday is not None:
@@ -340,7 +369,6 @@ def create_meeting(
 ):
     check_member(project_id, current_user, session, min_role="member")
 
-    # Auto-fill from recurring settings (body fields take precedence)
     mtg_settings = _load_meeting_settings(project_id)
 
     location = body.location
@@ -382,10 +410,12 @@ def create_meeting(
     meta["links"]["outlook_calendar"] = _outlook_calendar_url(meta)
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Add meeting: {body.title} ({body.date})"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
             raise HTTPException(409, "Meeting already exists")
         fm.write(path, meta, MEETING_TEMPLATE)
+        _rebuild_mtglog_in_worktree(wt)
     return {"id": mtg_id}
 
 
@@ -398,7 +428,7 @@ def get_meeting(
 ):
     check_member(project_id, current_user, session)
     try:
-        meta = _parse_meeting(project_id, f"meetings/{mtg_id}.md")
+        meta = _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
         public = _meeting_public(meta)
         public["_body"] = meta.get("_body", "")
         return public
@@ -427,7 +457,7 @@ def update_meeting(
         link_updates["outlook"] = updates.pop("outlook_link")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Update meeting: {mtg_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -442,6 +472,7 @@ def update_meeting(
         if content is not None and tab_id:
             content = dt.patch_tab(current, tab_id, content, "Pre-meeting")
         fm.write(path, meta, content if content is not None else current)
+        _rebuild_mtglog_in_worktree(wt)
     return {"ok": True}
 
 
@@ -456,7 +487,7 @@ def create_meeting_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Create meeting tab: {mtg_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -479,7 +510,7 @@ def update_meeting_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Update meeting tab: {mtg_id}/{tab_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -511,7 +542,7 @@ def delete_meeting_tab(
     check_member(project_id, current_user, session, min_role="member")
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Delete meeting tab: {mtg_id}/{tab_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -557,10 +588,11 @@ def delete_meeting(
 
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Delete meeting: {mtg_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         path.unlink()
+        _rebuild_mtglog_in_worktree(wt)
 
 
 @router.post("/{mtg_id}/analyze-transcript")
@@ -575,7 +607,7 @@ def analyze_meeting_transcript(
     transcript_tab, post_meeting_tab = _transcript_analysis_markdown(body.transcript)
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Analyze meeting transcript: {mtg_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, current = fm.read(path)
@@ -603,7 +635,7 @@ def download_ics(
 ):
     check_member(project_id, current_user, session)
     try:
-        meta = _parse_meeting(project_id, f"meetings/{mtg_id}.md")
+        meta = _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
@@ -663,7 +695,7 @@ async def sync_meeting_to_drive(
         raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
 
     try:
-        meta = _parse_meeting(project_id, f"meetings/{mtg_id}.md")
+        meta = _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
     content = meta.get("_body", "")
@@ -764,7 +796,7 @@ async def pull_meeting_from_drive(
     from datetime import datetime, timezone
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Pull meeting from Drive: {mtg_id}"
-        path = wt / "meetings" / f"{mtg_id}.md"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
         if not path.exists():
             raise HTTPException(404)
         meta, _ = fm.read(path)
@@ -804,11 +836,10 @@ async def smart_sync_meeting(
     ).first()
 
     try:
-        meta = _parse_meeting(project_id, f"meetings/{mtg_id}.md")
+        meta = _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
 
-    # No existing mapping → push as new doc
     if not mapping:
         content = meta.get("_body", "")
         title = meta.get("title", mtg_id)
@@ -829,7 +860,6 @@ async def smart_sync_meeting(
         session.commit()
         return {"direction": "push", "ok": True, "drive_link": result.get("webViewLink", "")}
 
-    # Compare Drive modifiedTime vs synced_at
     service = gd.get_service(token, str(current_user.id), session)
     drive_modified = gd.get_file_modified_time(service, mapping.drive_file_id)
     synced_at = mapping.synced_at
@@ -837,7 +867,6 @@ async def smart_sync_meeting(
         synced_at = synced_at.replace(tzinfo=timezone.utc)
 
     if drive_modified and drive_modified > synced_at + timedelta(seconds=5):
-        # Drive is newer → pull
         try:
             docs_service = gd.get_docs_service(token, str(current_user.id), session)
             text, _ = gd.export_google_doc_tabs_markdown(docs_service, mapping.drive_file_id)
@@ -851,7 +880,7 @@ async def smart_sync_meeting(
 
         with project_worktree(project_id) as wt:
             wt.commit_message = f"Smart-sync pull meeting from Drive: {mtg_id}"
-            path = wt / "meetings" / f"{mtg_id}.md"
+            path = wt / MEETINGS_DIR / f"{mtg_id}.md"
             if not path.exists():
                 raise HTTPException(404)
             old_meta, _ = fm.read(path)
@@ -863,7 +892,6 @@ async def smart_sync_meeting(
         return {"direction": "pull", "ok": True}
 
     else:
-        # Local is newer (or same) → push
         content = meta.get("_body", "")
         title = meta.get("title", mtg_id)
         tabs = meta.get("tabs") or dt.parse_tabs(content, "Pre-meeting")
@@ -890,11 +918,7 @@ async def sync_mtg_log(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Create / update a master MTG_LOG Google Doc in the Drive Meetings folder.
-
-    The log contains a table of all meetings (newest first) with dates, titles,
-    and links to the individual synced Drive documents.
-    """
+    """Create / update a master MTG_LOG Google Doc in the Drive Meetings folder."""
     from ..services import google_drive as gd
     from ..models import DriveFileMapping, Project
     from sqlmodel import select as sel
@@ -904,12 +928,11 @@ async def sync_mtg_log(
     if not token:
         raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
 
-    # Load all meetings sorted newest-first
-    paths = list_project_dir(project_id, "meetings")
+    paths = list_project_dir(project_id, MEETINGS_DIR)
     meetings_meta: list[dict] = []
     for p in sorted(paths, reverse=True):
         parts = p.split("/")
-        if not p.endswith(".md") or len(parts) != 2:
+        if not p.endswith(".md") or len(parts) != 3:
             continue
         try:
             m = _parse_meeting(project_id, p)
@@ -917,7 +940,6 @@ async def sync_mtg_log(
         except Exception:
             continue
 
-    # Resolve Drive links for each meeting
     mappings_by_id: dict[str, DriveFileMapping] = {}
     all_mappings = session.exec(
         sel(DriveFileMapping).where(
@@ -928,7 +950,6 @@ async def sync_mtg_log(
     for mp in all_mappings:
         mappings_by_id[mp.item_id] = mp
 
-    # Build MTG LOG markdown — heading-per-meeting format
     sections: list[str] = []
     for m in meetings_meta:
         mtg_date = m.get("date", "")
@@ -963,7 +984,6 @@ async def sync_mtg_log(
     project = session.get(Project, project_id)
     log_tabs = [{"id": "main", "title": "MTG Log", "content": log_content}]
 
-    # Find existing MTG_LOG mapping
     log_mapping = session.exec(
         sel(DriveFileMapping).where(
             DriveFileMapping.project_id == project_id,

@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from ..core.db import get_session
+from ..core.paths import DOCS_DIR, MEETINGS_DIR, PAPERS_NOTES_DIR
 from ..core.security import get_current_user
 from ..models import DriveFileMapping, Project, ProjectMember, User
 from ..services.project_fs import file_last_commit_time, list_project_dir
@@ -53,9 +54,9 @@ def _needs_sync(last_modified: Optional[datetime], synced_at: Optional[datetime]
 
 def _item_path(item_type: str, item_id: str) -> Optional[str]:
     return {
-        "doc": f"docs/{item_id}.md",
-        "meeting": f"meetings/{item_id}.md",
-        "paper_notes": f"papers/{item_id}.md",
+        "doc": f"{DOCS_DIR}/{item_id}.md",
+        "meeting": f"{MEETINGS_DIR}/{item_id}.md",
+        "paper_notes": f"{PAPERS_NOTES_DIR}/{item_id}.md",
     }.get(item_type)
 
 
@@ -159,7 +160,7 @@ def get_sync_status(
                 continue
             try:
                 meeting_paths = [
-                    p for p in list_project_dir(pid, "meetings") if p.endswith(".md")
+                    p for p in list_project_dir(pid, MEETINGS_DIR) if p.endswith(".md")
                 ]
                 latest_meeting_commit: Optional[datetime] = None
                 for mp in meeting_paths:
@@ -378,7 +379,7 @@ async def _sync_drive_item(
                 DriveFileMapping.item_id == item_id,
             )
         ).first()
-        meta = _parse_meeting(project_id, f"meetings/{item_id}.md")
+        meta = _parse_meeting(project_id, f"{MEETINGS_DIR}/{item_id}.md")
         tabs = meta.get("tabs") or dt.parse_tabs(meta.get("_body", ""), "Pre-meeting")
         title = meta.get("title", item_id)
         mtg_folder = gd.ensure_project_drive_child_folder(service, project_id, proj.name, "Meetings")
@@ -409,7 +410,7 @@ async def _sync_drive_item(
                 DriveFileMapping.item_id == item_id,
             )
         ).first()
-        meta = _parse_paper(project_id, f"papers/{item_id}.md")
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{item_id}.md")
         title = meta.get("title", item_id)
         notes_body = meta.get("_body", "").strip()
         content = f"# {title}\n\n{notes_body}"
@@ -448,12 +449,12 @@ async def _sync_drive_item(
         ).first()
 
         from ..services.project_fs import list_project_dir
-        paths = list_project_dir(project_id, "meetings")
+        paths = list_project_dir(project_id, MEETINGS_DIR)
         from ..api.meetings import _parse_meeting, _meeting_public
         meetings_meta = []
         for p in sorted(paths, reverse=True):
             parts = p.split("/")
-            if not p.endswith(".md") or len(parts) != 2:
+            if not p.endswith(".md") or len(parts) != 3:
                 continue
             try:
                 m = _parse_meeting(project_id, p)
@@ -531,7 +532,7 @@ async def _sync_zotero_paper(
     import frontmatter as _fm
     import httpx
 
-    content = read_project_file(project_id, f"papers/{paper_id}.md")
+    content = read_project_file(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
     post = _fm.loads(content)
     meta = post.metadata
     zotero_key = meta.get("zotero_key")
