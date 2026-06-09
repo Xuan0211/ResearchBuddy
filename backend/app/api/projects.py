@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 import frontmatter as frontmatter_lib
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..core.db import get_session
@@ -13,6 +14,7 @@ from ..core.security import get_current_user
 from ..models import DriveFileMapping, User, Project, ProjectInvite, ProjectMember
 from ..services import git_service
 from ..services.contacts import list_contacts as list_project_contacts, upsert_contact
+from ..services.members import ensure_creator_admin, is_project_creator, normalize_email, validate_role
 from ..services.project_fs import list_project_dir, read_project_file
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -27,6 +29,15 @@ class InviteIn(BaseModel):
     role: str = "member"
     email: str | None = None
     name: str | None = None
+
+
+class MemberInviteIn(BaseModel):
+    email: str
+    role: str = "member"
+
+
+class MemberRoleIn(BaseModel):
+    role: str
 
 
 class ContactIn(BaseModel):
@@ -416,21 +427,23 @@ def create_invite(
     if not session.get(Project, project_id):
         raise HTTPException(404)
     check_member(project_id, current_user, session, min_role="admin")
+    role = validate_role(body.role)
+    email = normalize_email(body.email) if body.email else None
     invite = ProjectInvite(
         project_id=project_id,
         invited_by=current_user.id,
         token=secrets.token_urlsafe(24),
-        role=body.role,
-        email=body.email,
+        role=role,
+        email=email,
     )
     session.add(invite)
     session.commit()
     session.refresh(invite)
-    if body.email:
+    if email:
         upsert_contact(project_id, {
-            "name": body.name or body.email.split("@", 1)[0],
-            "email": body.email,
-            "role": body.role,
+            "name": body.name or email.split("@", 1)[0],
+            "email": email,
+            "role": role,
             "source": "invite",
         })
     return {"token": invite.token, "role": invite.role}
@@ -461,20 +474,290 @@ def join_project(
     return project_response(project, member.role)
 
 
+def _member_payload(session: Session, project: Project, member: ProjectMember) -> dict | None:
+    user = session.get(User, member.user_id)
+    if not user:
+        return None
+    creator = is_project_creator(project, user.id)
+    return {
+        "id": str(member.id),
+        "user_id": str(user.id),
+        "name": user.name,
+        "email": user.email,
+        "role": "admin" if creator else member.role,
+        "status": "active",
+        "is_creator": creator,
+        "registered": True,
+        "joined_at": member.joined_at,
+    }
+
+
 @router.get("/{project_id}/members")
 def list_members(
     project_id: str,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
     check_member(project_id, current_user, session)
+    ensure_creator_admin(session, project)
+    session.commit()
     members = session.exec(select(ProjectMember).where(ProjectMember.project_id == project_id)).all()
     result = []
     for m in members:
-        user = session.get(User, m.user_id)
-        if user:
-            result.append({"user_id": str(user.id), "name": user.name, "email": user.email, "role": m.role})
+        payload = _member_payload(session, project, m)
+        if payload:
+            result.append(payload)
+    member_emails = {row["email"].lower() for row in result if row.get("email")}
+    invites = session.exec(
+        select(ProjectInvite).where(
+            ProjectInvite.project_id == project_id,
+            ProjectInvite.used == False,  # noqa: E712
+        )
+    ).all()
+    for invite in invites:
+        if not invite.email:
+            continue
+        email = normalize_email(invite.email)
+        if email in member_emails:
+            invite.used = True
+            session.add(invite)
+            continue
+        invited_user = session.exec(select(User).where(func.lower(User.email) == email)).first()
+        if invited_user:
+            member = ProjectMember(
+                project_id=project.id,
+                user_id=invited_user.id,
+                role="admin" if is_project_creator(project, invited_user.id) else validate_role(invite.role),
+            )
+            session.add(member)
+            session.flush()
+            invite.used = True
+            session.add(invite)
+            payload = _member_payload(session, project, member)
+            if payload:
+                result.append(payload)
+                member_emails.add(email)
+            continue
+        result.append({
+            "id": str(invite.id),
+            "invite_id": str(invite.id),
+            "user_id": None,
+            "name": email.split("@", 1)[0],
+            "email": email,
+            "role": invite.role,
+            "status": "pending",
+            "is_creator": False,
+            "registered": False,
+            "invited_at": invite.created_at,
+        })
+    session.commit()
     return result
+
+
+@router.post("/{project_id}/members", status_code=201)
+def invite_member(
+    project_id: str,
+    body: MemberInviteIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="admin")
+    ensure_creator_admin(session, project)
+    email = normalize_email(body.email)
+    role = validate_role(body.role)
+    if not email or "@" not in email:
+        raise HTTPException(400, "Invite needs a valid email")
+
+    user = session.exec(select(User).where(func.lower(User.email) == email)).first()
+    if user:
+        existing = session.exec(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project_id,
+                ProjectMember.user_id == user.id,
+            )
+        ).first()
+        if existing:
+            if is_project_creator(project, user.id):
+                existing.role = "admin"
+            else:
+                existing.role = role
+            session.add(existing)
+            member = existing
+        else:
+            member = ProjectMember(project_id=project.id, user_id=user.id, role="admin" if is_project_creator(project, user.id) else role)
+            session.add(member)
+        for invite in session.exec(
+            select(ProjectInvite).where(
+                ProjectInvite.project_id == project_id,
+                ProjectInvite.email == email,
+                ProjectInvite.used == False,  # noqa: E712
+            )
+        ).all():
+            invite.used = True
+            session.add(invite)
+        session.commit()
+        session.refresh(member)
+        return _member_payload(session, project, member)
+
+    existing_invite = session.exec(
+        select(ProjectInvite).where(
+            ProjectInvite.project_id == project_id,
+            ProjectInvite.email == email,
+            ProjectInvite.used == False,  # noqa: E712
+        )
+    ).first()
+    if existing_invite:
+        existing_invite.role = role
+        existing_invite.invited_by = current_user.id
+        session.add(existing_invite)
+        invite = existing_invite
+    else:
+        invite = ProjectInvite(
+            project_id=project.id,
+            invited_by=current_user.id,
+            token=secrets.token_urlsafe(24),
+            role=role,
+            email=email,
+        )
+        session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    return {
+        "id": str(invite.id),
+        "invite_id": str(invite.id),
+        "user_id": None,
+        "name": email.split("@", 1)[0],
+        "email": email,
+        "role": invite.role,
+        "status": "pending",
+        "is_creator": False,
+        "registered": False,
+        "invited_at": invite.created_at,
+    }
+
+
+@router.put("/{project_id}/members/{user_id}/role")
+def update_member_role(
+    project_id: str,
+    user_id: str,
+    body: MemberRoleIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="admin")
+    role = validate_role(body.role)
+    if is_project_creator(project, user_id):
+        raise HTTPException(400, "The project creator is always an admin")
+    member = session.exec(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    ).first()
+    if not member:
+        raise HTTPException(404, "Member not found")
+    member.role = role
+    session.add(member)
+    session.commit()
+    session.refresh(member)
+    return _member_payload(session, project, member)
+
+
+@router.delete("/{project_id}/members/{user_id}", status_code=204)
+def remove_member(
+    project_id: str,
+    user_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="admin")
+    if is_project_creator(project, user_id):
+        raise HTTPException(400, "The project creator cannot be removed")
+    member = session.exec(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == user_id,
+        )
+    ).first()
+    if not member:
+        raise HTTPException(404, "Member not found")
+    session.delete(member)
+    session.commit()
+
+
+@router.put("/{project_id}/invites/{invite_id}/role")
+def update_pending_invite_role(
+    project_id: str,
+    invite_id: str,
+    body: MemberRoleIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="admin")
+    role = validate_role(body.role)
+    invite = session.exec(
+        select(ProjectInvite).where(
+            ProjectInvite.id == invite_id,
+            ProjectInvite.project_id == project_id,
+            ProjectInvite.used == False,  # noqa: E712
+        )
+    ).first()
+    if not invite:
+        raise HTTPException(404, "Invite not found")
+    invite.role = role
+    session.add(invite)
+    session.commit()
+    session.refresh(invite)
+    email = normalize_email(invite.email or "")
+    return {
+        "id": str(invite.id),
+        "invite_id": str(invite.id),
+        "user_id": None,
+        "name": email.split("@", 1)[0],
+        "email": email,
+        "role": invite.role,
+        "status": "pending",
+        "is_creator": False,
+        "registered": False,
+        "invited_at": invite.created_at,
+    }
+
+
+@router.delete("/{project_id}/invites/{invite_id}", status_code=204)
+def delete_pending_invite(
+    project_id: str,
+    invite_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="admin")
+    invite = session.exec(
+        select(ProjectInvite).where(
+            ProjectInvite.id == invite_id,
+            ProjectInvite.project_id == project_id,
+            ProjectInvite.used == False,  # noqa: E712
+        )
+    ).first()
+    if not invite:
+        raise HTTPException(404, "Invite not found")
+    session.delete(invite)
+    session.commit()
 
 
 @router.get("/{project_id}/contacts")

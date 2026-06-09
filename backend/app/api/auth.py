@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
+from sqlalchemy import func
 from sqlmodel import Session, select
 
 from ..core.db import get_session
@@ -11,6 +12,7 @@ from ..core.security import (
     verify_password,
 )
 from ..models import APIKey, User
+from ..services.members import apply_pending_project_invites, normalize_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -32,10 +34,13 @@ class APIKeyIn(BaseModel):
 
 @router.post("/register", status_code=201)
 def register(body: RegisterIn, session: Session = Depends(get_session)):
-    if session.exec(select(User).where(User.email == body.email)).first():
+    email = normalize_email(str(body.email))
+    if session.exec(select(User).where(func.lower(User.email) == email)).first():
         raise HTTPException(400, "Email already registered")
-    user = User(email=body.email, hashed_password=hash_password(body.password), name=body.name)
+    user = User(email=email, hashed_password=hash_password(body.password), name=body.name)
     session.add(user)
+    session.flush()
+    apply_pending_project_invites(session, user)
     session.commit()
     session.refresh(user)
     return {"access_token": create_access_token(str(user.id)), "token_type": "bearer"}
@@ -43,9 +48,12 @@ def register(body: RegisterIn, session: Session = Depends(get_session)):
 
 @router.post("/login")
 def login(body: LoginIn, session: Session = Depends(get_session)):
-    user = session.exec(select(User).where(User.email == body.email)).first()
+    email = normalize_email(str(body.email))
+    user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(401, "Invalid credentials")
+    apply_pending_project_invites(session, user)
+    session.commit()
     return {"access_token": create_access_token(str(user.id)), "token_type": "bearer"}
 
 

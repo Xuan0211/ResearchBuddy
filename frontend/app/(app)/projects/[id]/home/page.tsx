@@ -1,9 +1,9 @@
 "use client"
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ExternalLink, Plus, Trash2, X } from "lucide-react"
+import { Crown, ExternalLink, Mail, Plus, Shield, Trash2, UserPlus, X } from "lucide-react"
 import { api } from "@/lib/api"
-import type { Contact, Document } from "@/lib/types"
+import type { Contact, Document, Project, ProjectMember } from "@/lib/types"
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -30,13 +30,28 @@ function monthsBetween(start: Date, end: Date) {
 }
 
 const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4"]
+
+const ROLE_LABELS: Record<ProjectMember["role"], string> = {
+  admin: "Admin",
+  member: "Can edit",
+  viewer: "Read only",
+}
+
+function roleDescription(role: ProjectMember["role"]) {
+  if (role === "admin") return "Manage members and edit everything"
+  if (role === "member") return "Edit project content"
+  return "View project content"
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function HomePage() {
   const { id: projectId } = useParams<{ id: string }>()
   const router = useRouter()
   const [gantt, setGantt] = useState<GanttData>({ tracks: [], milestones: [] })
+  const [project, setProject] = useState<Project | null>(null)
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [members, setMembers] = useState<ProjectMember[]>([])
   const [docs, setDocs] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
   const [addTrack, setAddTrack] = useState(false)
@@ -45,16 +60,19 @@ export default function HomePage() {
   const [addingItem, setAddingItem] = useState<string | null>(null) // track id
   const [itemForm, setItemForm] = useState({ title: "", start: "", end: "", doc_id: "", mentions: "" })
   const [selectedItem, setSelectedItem] = useState<(GanttItem & { trackName: string; trackColor: string }) | null>(null)
-  const [addingContact, setAddingContact] = useState(false)
-  const [contactForm, setContactForm] = useState({ name: "", email: "", handle: "" })
+  const [addingMember, setAddingMember] = useState(false)
+  const [memberForm, setMemberForm] = useState<{ email: string; role: ProjectMember["role"] }>({ email: "", role: "member" })
+  const [teamMsg, setTeamMsg] = useState("")
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     Promise.all([
+      api.get<Project>(`/api/projects/${projectId}`),
       api.get<GanttData>(`/api/projects/${projectId}/gantt`),
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).catch(() => [] as Contact[]),
+      api.get<ProjectMember[]>(`/api/projects/${projectId}/members`).catch(() => [] as ProjectMember[]),
       api.get<Document[]>(`/api/projects/${projectId}/docs`).catch(() => [] as Document[]),
-    ]).then(([g, c, d]) => { setGantt(g); setContacts(c); setDocs(d) }).finally(() => setLoading(false))
+    ]).then(([p, g, c, m, d]) => { setProject(p); setGantt(g); setContacts(c); setMembers(m); setDocs(d) }).finally(() => setLoading(false))
   }, [projectId])
 
   // Compute time range
@@ -112,23 +130,55 @@ export default function HomePage() {
     if (selectedItem?.id === itemId) setSelectedItem(null)
   }
 
-  async function saveContact(e: React.FormEvent) {
+  async function inviteMember(e: React.FormEvent) {
     e.preventDefault()
-    const c = await api.post<Contact>(`/api/projects/${projectId}/contacts`, contactForm)
-    setContacts(prev => [...prev.filter(x => x.handle !== c.handle), c])
-    setContactForm({ name: "", email: "", handle: "" })
-    setAddingContact(false)
+    setTeamMsg("")
+    try {
+      const member = await api.post<ProjectMember>(`/api/projects/${projectId}/members`, memberForm)
+      setMembers(prev => [...prev.filter(item => item.id !== member.id && item.email !== member.email), member])
+      setMemberForm({ email: "", role: "member" })
+      setAddingMember(false)
+      setTeamMsg(member.status === "pending" ? "Invitation saved. The user will get access automatically after registering." : "Member added.")
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
+    } catch (err: any) {
+      setTeamMsg(err.message || "Could not invite member")
+    }
   }
 
-  async function deleteContact(handle: string) {
-    if (!confirm("Remove this contact?")) return
-    await api.delete(`/api/projects/${projectId}/contacts/${handle}`)
-    setContacts(prev => prev.filter(c => c.handle !== handle))
+  async function updateMemberRole(member: ProjectMember, role: ProjectMember["role"]) {
+    setTeamMsg("")
+    try {
+      const updated = member.status === "pending" && member.invite_id
+        ? await api.put<ProjectMember>(`/api/projects/${projectId}/invites/${member.invite_id}/role`, { role })
+        : await api.put<ProjectMember>(`/api/projects/${projectId}/members/${member.user_id}/role`, { role })
+      setMembers(prev => prev.map(item => item.id === member.id ? updated : item))
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
+    } catch (err: any) {
+      setTeamMsg(err.message || "Could not update member")
+    }
+  }
+
+  async function removeProjectMember(member: ProjectMember) {
+    const label = member.status === "pending" ? "Cancel this invitation?" : `Remove ${member.email} from this project?`
+    if (!confirm(label)) return
+    setTeamMsg("")
+    try {
+      if (member.status === "pending" && member.invite_id) {
+        await api.delete(`/api/projects/${projectId}/invites/${member.invite_id}`)
+      } else {
+        await api.delete(`/api/projects/${projectId}/members/${member.user_id}`)
+      }
+      setMembers(prev => prev.filter(item => item.id !== member.id))
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
+    } catch (err: any) {
+      setTeamMsg(err.message || "Could not remove member")
+    }
   }
 
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
 
   const totalWidth = months.length * MONTH_W
+  const canManageTeam = project?.role === "admin"
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -306,38 +356,79 @@ export default function HomePage() {
         {/* ── Team ── */}
         <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
           <div className="px-5 py-3 border-b flex items-center justify-between">
-            <h3 className="font-semibold text-sm">Team</h3>
-            <button onClick={() => setAddingContact(v => !v)}
-              className="inline-flex items-center gap-1 text-xs border rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">
-              <Plus size={12} /> Contact
-            </button>
+            <div>
+              <h3 className="font-semibold text-sm">Team access</h3>
+              <p className="mt-0.5 text-xs text-gray-400">Invite people by email and control project permissions.</p>
+            </div>
+            {canManageTeam && (
+              <button onClick={() => setAddingMember(v => !v)}
+                className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">
+                <UserPlus size={13} /> Invite
+              </button>
+            )}
           </div>
-          {addingContact && (
-            <form onSubmit={saveContact} className="grid gap-2 border-b bg-gray-50 px-4 py-3 sm:grid-cols-[1fr_1fr_0.8fr_auto]">
-              <input value={contactForm.name} onChange={e => setContactForm({ ...contactForm, name: e.target.value })}
-                placeholder="Name" className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
-              <input value={contactForm.email} onChange={e => setContactForm({ ...contactForm, email: e.target.value })}
-                placeholder="email@lab.edu" className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
-              <input value={contactForm.handle} onChange={e => setContactForm({ ...contactForm, handle: e.target.value })}
-                placeholder="handle" required className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
-              <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Save</button>
+          {addingMember && canManageTeam && (
+            <form onSubmit={inviteMember} className="grid gap-2 border-b bg-gray-50 px-4 py-3 sm:grid-cols-[1fr_160px_auto]">
+              <input value={memberForm.email} onChange={e => setMemberForm({ ...memberForm, email: e.target.value })}
+                type="email" placeholder="teammate@lab.edu" required
+                className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              <select value={memberForm.role} onChange={e => setMemberForm({ ...memberForm, role: e.target.value as ProjectMember["role"] })}
+                className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none">
+                <option value="member">Can edit</option>
+                <option value="viewer">Read only</option>
+                <option value="admin">Admin</option>
+              </select>
+              <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Invite</button>
             </form>
           )}
-          <div className="p-4 flex flex-wrap gap-3">
-            {contacts.length === 0 ? (
-              <p className="text-sm text-gray-400">No contacts yet.</p>
-            ) : contacts.map(c => (
-              <div key={c.handle} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
-                <div className="w-7 h-7 rounded-full bg-black text-white text-xs font-medium flex items-center justify-center flex-shrink-0">
-                  {(c.name || c.handle)[0]?.toUpperCase()}
+          {teamMsg && <p className="border-b px-5 py-2 text-xs text-gray-500 whitespace-pre-line">{teamMsg}</p>}
+          <div className="divide-y">
+            {members.length === 0 ? (
+              <p className="px-5 py-8 text-sm text-gray-400">No project members yet.</p>
+            ) : members.map(member => (
+              <div key={member.id} className="flex items-center gap-3 px-5 py-3">
+                <div className={`w-8 h-8 rounded-full text-xs font-medium flex items-center justify-center flex-shrink-0 ${
+                  member.status === "pending" ? "bg-blue-50 text-blue-600" : "bg-black text-white"
+                }`}>
+                  {member.status === "pending" ? <Mail size={14} /> : (member.name || member.email)[0]?.toUpperCase()}
                 </div>
-                <div>
-                  <p className="text-xs font-medium">{c.name || c.handle}</p>
-                  <p className="text-[10px] text-gray-400">@{c.handle}</p>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium truncate">{member.name || member.email}</p>
+                    {member.is_creator && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                        <Crown size={10} /> Creator
+                      </span>
+                    )}
+                    {member.status === "pending" && (
+                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
+                        Not registered
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-400 truncate">{member.email}</p>
+                  <p className="mt-0.5 text-[11px] text-gray-400">{roleDescription(member.role)}</p>
                 </div>
-                <button onClick={() => deleteContact(c.handle)} className="ml-1 text-gray-300 hover:text-red-500">
-                  <Trash2 size={12} />
-                </button>
+                <div className="flex items-center gap-2">
+                  {canManageTeam && !member.is_creator ? (
+                    <select value={member.role} onChange={e => updateMemberRole(member, e.target.value as ProjectMember["role"])}
+                      className="rounded-lg border px-2 py-1.5 text-xs text-gray-600">
+                      <option value="member">Can edit</option>
+                      <option value="viewer">Read only</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-gray-600">
+                      <Shield size={12} /> {ROLE_LABELS[member.role]}
+                    </span>
+                  )}
+                  {canManageTeam && !member.is_creator && (
+                    <button onClick={() => removeProjectMember(member)} className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
+                      title={member.status === "pending" ? "Cancel invitation" : "Remove member"}>
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

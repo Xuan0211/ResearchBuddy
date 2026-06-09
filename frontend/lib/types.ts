@@ -51,6 +51,20 @@ export interface Contact {
   source: string
 }
 
+export interface ProjectMember {
+  id: string
+  user_id: string | null
+  invite_id?: string
+  name: string
+  email: string
+  role: "admin" | "member" | "viewer"
+  status: "active" | "pending"
+  is_creator: boolean
+  registered: boolean
+  joined_at?: string
+  invited_at?: string
+}
+
 export interface Document {
   id: string
   title: string
