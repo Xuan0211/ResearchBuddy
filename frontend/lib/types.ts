@@ -73,6 +73,7 @@ export interface Document {
   updated: string
   tabs?: DocumentTab[]
   _body?: string
+  _path?: string
 }
 
 export interface DocumentTab {

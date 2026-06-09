@@ -1,5 +1,5 @@
 "use client"
-import type { CSSProperties } from "react"
+import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
 import { Crown, Mail, Plus, Shield, Trash2, UserPlus, X } from "lucide-react"
@@ -44,6 +44,24 @@ interface ResizeDrag {
   currentStart: string
   currentEnd: string
 }
+interface DocOption {
+  id: string
+  title: string
+  path: string
+  search: string
+}
+interface DocTreeNode {
+  type: "dir" | "doc"
+  name: string
+  path: string
+  doc?: DocOption
+  children?: DocTreeNode[]
+}
+interface PersonOption {
+  value: string
+  label: string
+  search: string
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -63,6 +81,10 @@ function addDays(iso: string, days: number) {
   return formatDate(toMs(iso) + days * DAY_MS)
 }
 
+function addMonths(date: Date, months: number) {
+  return new Date(date.getFullYear(), date.getMonth() + months, date.getDate())
+}
+
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n))
 }
@@ -79,6 +101,63 @@ function monthsBetween(start: Date, end: Date) {
     d.setMonth(d.getMonth() + 1)
   }
   return months
+}
+
+function docPath(doc: Document) {
+  return doc._path || `docs/${doc.id}.md`
+}
+
+function docTitleFromPath(path: string) {
+  return path.split("/").pop()?.replace(/\.md$/, "") || path
+}
+
+function docDisplay(option: DocOption) {
+  return `${option.path.replace(/^docs\//, "")} · ${option.title}`
+}
+
+function buildDocOptions(docs: Document[]): DocOption[] {
+  return docs.map(doc => {
+    const path = docPath(doc)
+    const title = doc.title || docTitleFromPath(path)
+    return {
+      id: doc.id,
+      title,
+      path,
+      search: `${path} ${title}`.toLowerCase(),
+    }
+  }).sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function buildDocTree(options: DocOption[]) {
+  const root: DocTreeNode = { type: "dir", name: "docs", path: "docs", children: [] }
+  for (const option of options) {
+    const rel = option.path.replace(/^docs\//, "")
+    const parts = rel.split("/")
+    let node = root
+    parts.forEach((part, index) => {
+      const isLeaf = index === parts.length - 1
+      if (isLeaf) {
+        node.children!.push({ type: "doc", name: part.replace(/\.md$/, ""), path: option.path, doc: option })
+        return
+      }
+      const dirPath = `docs/${parts.slice(0, index + 1).join("/")}`
+      let child = node.children!.find(item => item.type === "dir" && item.path === dirPath)
+      if (!child) {
+        child = { type: "dir", name: part, path: dirPath, children: [] }
+        node.children!.push(child)
+      }
+      node = child
+    })
+  }
+  function sortNode(node: DocTreeNode) {
+    node.children?.sort((a, b) => {
+      if (a.type !== b.type) return a.type === "dir" ? -1 : 1
+      return a.name.localeCompare(b.name)
+    })
+    node.children?.forEach(sortNode)
+  }
+  sortNode(root)
+  return root.children || []
 }
 
 const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4"]
@@ -112,13 +191,18 @@ export default function HomePage() {
   const [timelineEditor, setTimelineEditor] = useState<TimelineEditor | null>(null)
   const [hoveredItem, setHoveredItem] = useState<HoveredTimelineItem | null>(null)
   const [draggingItem, setDraggingItem] = useState<string | null>(null)
+  const [docQuery, setDocQuery] = useState("")
+  const [personQuery, setPersonQuery] = useState("")
+  const [expandedDocDirs, setExpandedDocDirs] = useState<Set<string>>(new Set(["docs"]))
   const [addingMember, setAddingMember] = useState(false)
   const [memberForm, setMemberForm] = useState<{ email: string; role: ProjectMember["role"] }>({ email: "", role: "member" })
   const [teamMsg, setTeamMsg] = useState("")
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<ResizeDrag | null>(null)
+  const initializedTimelineRef = useRef(false)
 
   useEffect(() => {
+    initializedTimelineRef.current = false
     Promise.all([
       api.get<Project>(`/api/projects/${projectId}`),
       api.get<GanttData>(`/api/projects/${projectId}/gantt`),
@@ -134,10 +218,13 @@ export default function HomePage() {
     ...gantt.milestones.map(m => m.date),
   ].filter(Boolean)
   const now = new Date()
-  const minDate = allDates.length ? new Date(Math.min(...allDates.map(toMs))) : new Date(now.getFullYear(), now.getMonth() - 1, 1)
-  const maxDate = allDates.length ? new Date(Math.max(...allDates.map(toMs))) : new Date(now.getFullYear(), now.getMonth() + 5, 1)
-  const viewStart = new Date(minDate.getFullYear(), minDate.getMonth() - 1, 1)
-  const viewEnd = new Date(maxDate.getFullYear(), maxDate.getMonth() + 2, 1)
+  const projectStart = project?.created_at ? new Date(project.created_at) : now
+  const baseStart = new Date(projectStart.getFullYear() - 1, projectStart.getMonth(), 1)
+  const baseEnd = new Date(projectStart.getFullYear() + 1, projectStart.getMonth() + 1, 1)
+  const itemMin = allDates.length ? new Date(Math.min(...allDates.map(toMs))) : baseStart
+  const itemMax = allDates.length ? new Date(Math.max(...allDates.map(toMs))) : baseEnd
+  const viewStart = new Date(Math.min(baseStart.getTime(), addMonths(itemMin, -1).getTime()))
+  const viewEnd = new Date(Math.max(baseEnd.getTime(), addMonths(itemMax, 1).getTime()))
   const totalMs = viewEnd.getTime() - viewStart.getTime()
   const months = monthsBetween(viewStart, viewEnd)
   const totalWidth = months.length * monthWidth
@@ -150,6 +237,21 @@ export default function HomePage() {
     const ratio = clamp(x / Math.max(1, totalWidth), 0, 1)
     return formatDate(viewStart.getTime() + ratio * totalMs)
   }
+
+  useEffect(() => {
+    if (loading || initializedTimelineRef.current || !scrollRef.current || months.length === 0) return
+    const viewport = scrollRef.current
+    const targetMonthWidth = clamp(viewport.clientWidth / 6, 82, 220)
+    const nextTotalWidth = months.length * targetMonthWidth
+    const recentStart = addMonths(now, -5)
+    const targetDate = new Date(clamp(recentStart.getTime(), viewStart.getTime(), viewEnd.getTime()))
+    const targetX = ((targetDate.getTime() - viewStart.getTime()) / Math.max(1, totalMs)) * nextTotalWidth
+    initializedTimelineRef.current = true
+    setMonthWidth(targetMonthWidth)
+    window.requestAnimationFrame(() => {
+      viewport.scrollLeft = clamp(targetX, 0, Math.max(0, nextTotalWidth - viewport.clientWidth))
+    })
+  }, [loading, months.length, projectId, totalMs, viewEnd, viewStart])
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
@@ -168,6 +270,10 @@ export default function HomePage() {
       }
       drag.currentStart = start
       drag.currentEnd = end
+      if (drag.itemId === "__draft__") {
+        setTimelineEditor(editor => editor ? { ...editor, start, end } : editor)
+        return
+      }
       setGantt(g => ({
         ...g,
         tracks: g.tracks.map(t => t.id === drag.trackId ? {
@@ -182,6 +288,7 @@ export default function HomePage() {
       if (!drag) return
       dragRef.current = null
       setDraggingItem(null)
+      if (drag.itemId === "__draft__") return
       if (drag.currentStart === drag.originalStart && drag.currentEnd === drag.originalEnd) return
       try {
         await api.patch<GanttItem>(`/api/projects/${projectId}/gantt/tracks/${drag.trackId}/items/${drag.itemId}`, {
@@ -224,6 +331,8 @@ export default function HomePage() {
 
   function openCreateItem(trackId: string, date: string, x: number, y: number) {
     setHoveredItem(null)
+    setDocQuery("")
+    setPersonQuery("")
     setTimelineEditor({
       mode: "create",
       trackId,
@@ -240,6 +349,8 @@ export default function HomePage() {
 
   function openEditItem(track: GanttTrack, item: GanttItem, x: number, y: number) {
     setHoveredItem(null)
+    setDocQuery("")
+    setPersonQuery("")
     setTimelineEditor({
       mode: "edit",
       trackId: track.id,
@@ -255,8 +366,42 @@ export default function HomePage() {
     })
   }
 
-  function updateEditorMulti(field: "doc_ids" | "mentions", values: string[]) {
-    setTimelineEditor(editor => editor ? { ...editor, [field]: values } : editor)
+  function addEditorDoc(docId: string) {
+    setTimelineEditor(editor => {
+      if (!editor || editor.doc_ids.includes(docId)) return editor
+      return { ...editor, doc_ids: [...editor.doc_ids, docId] }
+    })
+    setDocQuery("")
+  }
+
+  function removeEditorDoc(docId: string) {
+    setTimelineEditor(editor => editor ? { ...editor, doc_ids: editor.doc_ids.filter(id => id !== docId) } : editor)
+  }
+
+  function addEditorPerson(value: string) {
+    setTimelineEditor(editor => {
+      if (!editor || editor.mentions.includes(value)) return editor
+      return { ...editor, mentions: [...editor.mentions, value] }
+    })
+    setPersonQuery("")
+  }
+
+  function removeEditorPerson(value: string) {
+    setTimelineEditor(editor => editor ? { ...editor, mentions: editor.mentions.filter(item => item !== value) } : editor)
+  }
+
+  function addFirstMatchingDoc() {
+    const query = docQuery.trim().toLowerCase()
+    if (!query) return
+    const match = docOptions.find(doc => doc.search.includes(query))
+    if (match) addEditorDoc(match.id)
+  }
+
+  function addFirstMatchingPerson() {
+    const query = personQuery.trim().toLowerCase()
+    if (!query) return
+    const match = peopleOptions.find(person => person.search.includes(query))
+    if (match) addEditorPerson(match.value)
   }
 
   async function saveTimelineItem(e: React.FormEvent) {
@@ -333,6 +478,23 @@ export default function HomePage() {
     setDraggingItem(item.id)
   }
 
+  function startDraftResize(e: React.MouseEvent, edge: "start" | "end") {
+    if (!timelineEditor) return
+    e.preventDefault()
+    e.stopPropagation()
+    dragRef.current = {
+      trackId: timelineEditor.trackId,
+      itemId: "__draft__",
+      edge,
+      clientX: e.clientX,
+      originalStart: timelineEditor.start,
+      originalEnd: timelineEditor.end,
+      currentStart: timelineEditor.start,
+      currentEnd: timelineEditor.end,
+    }
+    setDraggingItem("__draft__")
+  }
+
   async function inviteMember(e: React.FormEvent) {
     e.preventDefault()
     setTeamMsg("")
@@ -382,11 +544,23 @@ export default function HomePage() {
 
   const canManageTeam = project?.role === "admin"
   const canEditTimeline = project?.role === "admin" || project?.role === "member"
-  const peopleEntries: [string, { value: string; label: string; detail: string }][] = [
-    ...contacts.map(c => [c.handle, { value: c.handle, label: `@${c.handle}`, detail: c.name || c.email }] as [string, { value: string; label: string; detail: string }]),
-    ...members.filter(m => m.status === "active").map(m => [m.email, { value: m.email, label: m.name || m.email, detail: m.email }] as [string, { value: string; label: string; detail: string }]),
+  const docOptions = buildDocOptions(docs)
+  const docTree = buildDocTree(docOptions)
+  const docById = new Map(docOptions.map(doc => [doc.id, doc]))
+  const peopleEntries: [string, PersonOption][] = [
+    ...contacts.map(c => [c.handle, {
+      value: c.handle,
+      label: c.name || c.handle,
+      search: `${c.name} ${c.handle} ${c.email}`.toLowerCase(),
+    }] as [string, PersonOption]),
+    ...members.filter(m => m.status === "active").map(m => [m.email, {
+      value: m.email,
+      label: m.name || m.email.split("@", 1)[0],
+      search: `${m.name} ${m.email}`.toLowerCase(),
+    }] as [string, PersonOption]),
   ]
   const peopleOptions = Array.from(new Map(peopleEntries).values())
+  const personByValue = new Map(peopleOptions.map(person => [person.value, person]))
 
   function floatingStyle(x: number, y: number, width: number, height: number): CSSProperties {
     if (typeof window === "undefined") return { left: x + 12, top: y + 12 }
@@ -394,6 +568,46 @@ export default function HomePage() {
       left: clamp(x + 12, 12, window.innerWidth - width - 12),
       top: clamp(y + 12, 12, window.innerHeight - height - 12),
     }
+  }
+
+  function toggleDocDir(path: string) {
+    setExpandedDocDirs(prev => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  function renderDocNode(node: DocTreeNode, depth = 0): ReactNode {
+    if (node.type === "dir") {
+      const open = expandedDocDirs.has(node.path)
+      return (
+        <div key={node.path}>
+          <button type="button" onClick={() => toggleDocDir(node.path)}
+            className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs text-gray-600 hover:bg-gray-50"
+            style={{ paddingLeft: 6 + depth * 14 }}>
+            <span className="w-3 text-gray-400">{open ? "−" : "+"}</span>
+            <span className="truncate">{node.name}</span>
+          </button>
+          {open && node.children?.map(child => renderDocNode(child, depth + 1))}
+        </div>
+      )
+    }
+    const selected = !!timelineEditor?.doc_ids.includes(node.doc!.id)
+    return (
+      <button key={node.path} type="button" onClick={() => addEditorDoc(node.doc!.id)}
+        disabled={selected}
+        className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45"
+        style={{ paddingLeft: 6 + depth * 14 }}>
+        <span className="min-w-0 truncate text-gray-700">{node.name}</span>
+        <span className="shrink-0 text-[10px] text-gray-400">{selected ? "Added" : "Add"}</span>
+      </button>
+    )
+  }
+
+  function personLabel(value: string) {
+    return personByValue.get(value)?.label || value.replace(/^@/, "").split("@", 1)[0]
   }
 
   return (
@@ -513,7 +727,7 @@ export default function HomePage() {
                               <span className="ml-1 opacity-75 text-[10px]">docs {docIds.length}</span>
                             ) : null}
                             {item.mentions?.length ? (
-                              <span className="ml-1 opacity-75 text-[10px]">@{item.mentions[0]}{item.mentions.length > 1 ? `+${item.mentions.length-1}` : ""}</span>
+                              <span className="ml-1 opacity-75 text-[10px]">{personLabel(item.mentions[0])}{item.mentions.length > 1 ? ` +${item.mentions.length-1}` : ""}</span>
                             ) : null}
                             {canEditTimeline && (
                               <span onMouseDown={e => startResize(e, track.id, item, "end")}
@@ -522,6 +736,23 @@ export default function HomePage() {
                           </div>
                         )
                       })}
+                      {timelineEditor?.mode === "create" && timelineEditor.trackId === track.id && (() => {
+                        const left = xForDate(timelineEditor.start)
+                        const width = Math.max(xForDate(timelineEditor.end) - left, 36)
+                        return (
+                          <div
+                            className="absolute z-30 flex h-8 items-center rounded-md border border-white/70 px-2 text-[11px] font-medium text-white shadow-sm ring-2 ring-black/10"
+                            style={{ left, width, background: track.color, opacity: 0.78 }}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <span onMouseDown={e => startDraftResize(e, "start")}
+                              className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-white/0 hover:bg-white/30" />
+                            <span className="truncate">{timelineEditor.title.trim() || "New item"}</span>
+                            <span onMouseDown={e => startDraftResize(e, "end")}
+                              className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-white/0 hover:bg-white/30" />
+                          </div>
+                        )
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -536,10 +767,15 @@ export default function HomePage() {
             <p className="font-medium text-gray-900">{hoveredItem.item.title}</p>
             <p className="mt-1 text-gray-400">{hoveredItem.track.name} · {hoveredItem.item.start} to {hoveredItem.item.end}</p>
             {normalizeDocIds(hoveredItem.item).length > 0 && (
-              <p className="mt-2 text-gray-500">{normalizeDocIds(hoveredItem.item).length} linked doc{normalizeDocIds(hoveredItem.item).length > 1 ? "s" : ""}</p>
+              <div className="mt-2 space-y-1 text-gray-500">
+                {normalizeDocIds(hoveredItem.item).map(docId => {
+                  const doc = docById.get(docId)
+                  return <p key={docId} className="truncate">{doc ? docDisplay(doc) : docId}</p>
+                })}
+              </div>
             )}
             {hoveredItem.item.mentions?.length ? (
-              <p className="mt-1 text-gray-500">{hoveredItem.item.mentions.map(m => m.startsWith("@") ? m : `@${m}`).join(", ")}</p>
+              <p className="mt-1 text-gray-500">{hoveredItem.item.mentions.map(personLabel).join(", ")}</p>
             ) : null}
             {hoveredItem.item.note && <p className="mt-2 line-clamp-3 text-gray-500">{hoveredItem.item.note}</p>}
           </div>
@@ -547,8 +783,8 @@ export default function HomePage() {
 
         {timelineEditor && (
           <form onSubmit={saveTimelineItem}
-            className="fixed z-50 w-[340px] rounded-xl border bg-white p-4 shadow-2xl"
-            style={floatingStyle(timelineEditor.x, timelineEditor.y, 340, 470)}>
+            className="fixed z-50 max-h-[calc(100vh-24px)] w-[380px] overflow-y-auto rounded-xl border bg-white p-4 shadow-2xl"
+            style={floatingStyle(timelineEditor.x, timelineEditor.y, 380, 660)}>
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
                 <p className="text-sm font-semibold">{timelineEditor.mode === "create" ? "New timeline item" : "Edit timeline item"}</p>
@@ -579,22 +815,86 @@ export default function HomePage() {
                     className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black" />
                 </label>
               </div>
-              <label className="block">
+              <div>
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Linked docs</span>
-                <select multiple value={timelineEditor.doc_ids}
-                  onChange={e => updateEditorMulti("doc_ids", Array.from(e.currentTarget.selectedOptions).map(option => option.value))}
-                  className="mt-1 h-24 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black">
-                  {docs.map(doc => <option key={doc.id} value={doc.id}>{doc.title}</option>)}
-                </select>
-              </label>
-              <label className="block">
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {timelineEditor.doc_ids.map(docId => {
+                    const doc = docById.get(docId)
+                    return (
+                      <span key={docId} className="inline-flex max-w-full items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-700">
+                        <span className="truncate">{doc ? docDisplay(doc) : docId}</span>
+                        <button type="button" onClick={() => removeEditorDoc(docId)} className="text-blue-400 hover:text-blue-700">
+                          <X size={10} />
+                        </button>
+                      </span>
+                    )
+                  })}
+                </div>
+                <div className="mt-2 rounded-lg border">
+                  <div className="flex items-center gap-1 border-b px-2 py-1.5">
+                    <input value={docQuery} onChange={e => setDocQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addFirstMatchingDoc() } }}
+                      placeholder="Search docs"
+                      className="min-w-0 flex-1 text-xs outline-none" />
+                    <button type="button" onClick={addFirstMatchingDoc}
+                      className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button>
+                  </div>
+                  <div className="max-h-28 overflow-auto p-1">
+                    {docQuery.trim() ? (
+                      docOptions.filter(doc => doc.search.includes(docQuery.trim().toLowerCase())).slice(0, 8).map(doc => (
+                        <button key={doc.id} type="button" onClick={() => addEditorDoc(doc.id)}
+                          disabled={timelineEditor.doc_ids.includes(doc.id)}
+                          className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45">
+                          <span className="min-w-0 truncate text-gray-700">{docDisplay(doc)}</span>
+                          <span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.doc_ids.includes(doc.id) ? "Added" : "Add"}</span>
+                        </button>
+                      ))
+                    ) : (
+                      docTree.length ? docTree.map(node => renderDocNode(node)) : <p className="px-2 py-2 text-xs text-gray-400">No docs</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div>
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</span>
-                <select multiple value={timelineEditor.mentions}
-                  onChange={e => updateEditorMulti("mentions", Array.from(e.currentTarget.selectedOptions).map(option => option.value))}
-                  className="mt-1 h-24 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black">
-                  {peopleOptions.map(person => <option key={person.value} value={person.value}>{person.label} {person.detail ? `· ${person.detail}` : ""}</option>)}
-                </select>
-              </label>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {timelineEditor.mentions.map(value => {
+                    const person = personByValue.get(value)
+                    return (
+                      <span key={value} className="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-700">
+                        <span className="truncate">{person?.label || value.replace(/^@/, "")}</span>
+                        <button type="button" onClick={() => removeEditorPerson(value)} className="text-gray-400 hover:text-gray-700">
+                          <X size={10} />
+                        </button>
+                      </span>
+                    )
+                  })}
+                </div>
+                <div className="mt-2 rounded-lg border">
+                  <div className="flex items-center gap-1 border-b px-2 py-1.5">
+                    <input value={personQuery} onChange={e => setPersonQuery(e.target.value)}
+                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addFirstMatchingPerson() } }}
+                      placeholder="Search people"
+                      className="min-w-0 flex-1 text-xs outline-none" />
+                    <button type="button" onClick={addFirstMatchingPerson}
+                      className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button>
+                  </div>
+                  <div className="max-h-24 overflow-auto p-1">
+                    {(personQuery.trim()
+                      ? peopleOptions.filter(person => person.search.includes(personQuery.trim().toLowerCase()))
+                      : peopleOptions
+                    ).slice(0, 8).map(person => (
+                      <button key={person.value} type="button" onClick={() => addEditorPerson(person.value)}
+                        disabled={timelineEditor.mentions.includes(person.value)}
+                        className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45">
+                        <span className="min-w-0 truncate text-gray-700">{person.label}</span>
+                        <span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.mentions.includes(person.value) ? "Added" : "Add"}</span>
+                      </button>
+                    ))}
+                    {peopleOptions.length === 0 && <p className="px-2 py-2 text-xs text-gray-400">No people</p>}
+                  </div>
+                </div>
+              </div>
               <label className="block">
                 <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Note</span>
                 <textarea value={timelineEditor.note}
