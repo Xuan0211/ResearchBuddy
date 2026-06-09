@@ -155,7 +155,11 @@ export default function MeetingsPage() {
 
   return (
     <div className="p-6 max-w-5xl space-y-5">
-      <SectionResourcesPanel projectId={projectId} section="meetings" title="Meeting docs and skills" />
+      <div>
+        <h3 className="font-medium text-sm">Meetings</h3>
+      </div>
+
+      <SectionResourcesPanel projectId={projectId} section="meetings" />
 
       {/* ── Team / Contacts ── */}
       <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -204,7 +208,7 @@ export default function MeetingsPage() {
       {/* ── Meetings ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h3 className="font-medium text-sm">Meetings</h3>
+          <h3 className="font-medium text-sm">Meeting schedule</h3>
           {nextMeetingDate && <span className="text-xs text-gray-400">Next: {nextMeetingDate}</span>}
         </div>
         <div className="flex items-center gap-2">

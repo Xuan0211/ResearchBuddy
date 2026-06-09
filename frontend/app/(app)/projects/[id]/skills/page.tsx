@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm"
 import { Archive, Download, Edit2, FileUp, FolderOpen, Plus, Save, Tag, Trash2, Upload, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { ProjectSkill } from "@/lib/types"
+import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const MAX_MB = 10
@@ -249,7 +250,13 @@ export default function SkillsPage() {
   const allInFilter = filter === "all" ? skills : (grouped[filter] ?? [])
 
   return (
-    <div className="flex h-full overflow-hidden bg-white">
+    <div className="flex h-full flex-col overflow-hidden bg-white">
+      <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
+        <h3 className="text-sm font-semibold">Skills</h3>
+        <SectionResourcesPanel projectId={projectId} section="skills" />
+      </div>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
 
       {/* ── Left column: list ── */}
       <aside className="w-72 border-r flex flex-col flex-shrink-0 overflow-hidden">
@@ -479,6 +486,7 @@ export default function SkillsPage() {
           </div>
         )}
       </main>
+      </div>
     </div>
   )
 }

@@ -11,6 +11,7 @@ export default function PrototypePage() {
       <div>
         <h2 className="text-base font-semibold">Prototype</h2>
       </div>
+      <SectionResourcesPanel projectId={projectId} section="prototype" />
       <ModuleLinksPanel
         projectId={projectId}
         section="prototype"
@@ -19,7 +20,6 @@ export default function PrototypePage() {
         labelPlaceholder="Repository or branch"
         urlPlaceholder="https://github.com/..."
       />
-      <SectionResourcesPanel projectId={projectId} section="prototype" title="Prototype docs & skills" />
     </div>
   )
 }

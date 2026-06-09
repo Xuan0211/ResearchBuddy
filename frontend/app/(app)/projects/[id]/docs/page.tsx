@@ -248,6 +248,8 @@ export default function DocsPage() {
         </button>
       </div>
 
+      <SectionResourcesPanel projectId={projectId} section="docs" />
+
       {/* Create folder inline */}
       {creatingFolder && (
         <form onSubmit={createFolder} className="flex gap-2 items-center">
@@ -338,7 +340,6 @@ export default function DocsPage() {
           })}
         </div>
       )}
-      <SectionResourcesPanel projectId={projectId} section="docs" title="Docs resources" />
     </div>
   )
 }

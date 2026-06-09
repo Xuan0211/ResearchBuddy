@@ -138,6 +138,16 @@ export default function PapersPage() {
     <div className="flex flex-col h-full overflow-hidden">
       {/* ── Toolbar ── */}
       <div className="border-b bg-white px-4 py-3 flex-shrink-0 space-y-2">
+        <h3 className="font-medium text-sm">Papers</h3>
+        <SectionResourcesPanel projectId={projectId} section="papers" />
+        <ModuleLinksPanel
+          projectId={projectId}
+          section="papers"
+          kind="link"
+          title="Paper links"
+          labelPlaceholder="GitHub / Figma / Overleaf"
+          urlPlaceholder="https://..."
+        />
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
           <input
@@ -230,15 +240,6 @@ export default function PapersPage() {
       {/* ── Gallery ── */}
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="mb-4 space-y-3">
-          <ModuleLinksPanel
-            projectId={projectId}
-            section="papers"
-            kind="link"
-            title="Paper links"
-            labelPlaceholder="GitHub / Figma / Overleaf"
-            urlPlaceholder="https://..."
-          />
-          <SectionResourcesPanel projectId={projectId} section="papers" title="Papers docs and skills" />
           <AIPapersPanel projectId={projectId} />
         </div>
         {filtered.length === 0 ? (

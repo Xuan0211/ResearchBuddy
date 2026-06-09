@@ -40,8 +40,6 @@ export default function CodingPage() {
 
   return (
     <div className="p-6 max-w-4xl space-y-5">
-      <SectionResourcesPanel projectId={projectId} section="coding" title="Coding docs and skills" />
-
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-medium">Coding</h3>
@@ -52,6 +50,8 @@ export default function CodingPage() {
           <Plus size={13} /> New codebook
         </button>
       </div>
+
+      <SectionResourcesPanel projectId={projectId} section="coding" />
 
       {creating && (
         <form onSubmit={createCodebook} className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-sm">

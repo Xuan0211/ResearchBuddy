@@ -226,7 +226,7 @@ export default function WorkspacePage() {
           </div>
         </section>
 
-        <SectionResourcesPanel projectId={projectId} section="workspace" title="Workspace resources" />
+        <SectionResourcesPanel projectId={projectId} section="workspace" />
       </div>
     </div>
   )

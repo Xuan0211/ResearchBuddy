@@ -40,6 +40,14 @@ export default function WritingPage() {
     setSelected(full)
   }
 
+  async function openProject(wp: WritingProject) {
+    const full = await api.get<WritingProject>(`/api/projects/${projectId}/writing/${wp.id}`)
+    setSelected(full)
+    setProjects(prev => prev.map(p => p.id === full.id ? full : p))
+    setSelectedFile(null)
+    setEditingUrls(false)
+  }
+
   async function openFile(wp: WritingProject, path: string) {
     setFileLoading(true)
     try {
@@ -71,7 +79,13 @@ export default function WritingPage() {
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
 
   return (
-    <div className="flex h-full overflow-hidden">
+    <div className="flex h-full flex-col overflow-hidden">
+      <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
+        <h3 className="text-sm font-semibold">Writing</h3>
+        <SectionResourcesPanel projectId={projectId} section="writing" />
+      </div>
+
+      <div className="flex min-h-0 flex-1 overflow-hidden">
       {/* ── Sidebar ── */}
       <div className="w-56 border-r bg-gray-50 flex flex-col flex-shrink-0">
         <div className="p-4 border-b flex items-center justify-between">
@@ -81,7 +95,7 @@ export default function WritingPage() {
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-0.5">
           {projects.map(p => (
-            <button key={p.id} onClick={() => { setSelected(p); setSelectedFile(null); setEditingUrls(false) }}
+            <button key={p.id} onClick={() => openProject(p)}
               className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
                 selected?.id === p.id ? "bg-black text-white" : "text-gray-600 hover:bg-gray-100"
               }`}>
@@ -200,14 +214,6 @@ export default function WritingPage() {
                       </button>
                     </div>
                   )}
-
-                  <SectionResourcesPanel
-                    projectId={projectId}
-                    section="writing"
-                    scope={selected.id}
-                    title="Writing docs & skills"
-                  />
-
                   <div className="p-4 bg-gray-50 rounded-xl text-xs text-gray-500 space-y-1">
                     <p className="font-medium text-gray-700">AI writing guidelines</p>
                     <p>• <code className="bg-white px-1 rounded">reference.bib</code> is read-only — managed by Zotero</p>
@@ -238,6 +244,7 @@ export default function WritingPage() {
             Select a writing project or create one.
           </div>
         ) : null}
+      </div>
       </div>
     </div>
   )

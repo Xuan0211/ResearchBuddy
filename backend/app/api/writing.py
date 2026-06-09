@@ -163,6 +163,13 @@ def _init_latex_structure(base: Path) -> None:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
+def _writing_files(project_id: str, writing_id: str) -> list[str]:
+    return [
+        path for path in list_project_dir(project_id, f"writing/{writing_id}")
+        if not path.endswith(".gitkeep")
+    ]
+
+
 @router.get("")
 def list_writing_projects(
     project_id: str,
@@ -184,7 +191,8 @@ def list_writing_projects(
             content = read_project_file(project_id, p)
             post = _fm.loads(content)
             meta = dict(post.metadata)
-            results.append({**meta, "_path": p})
+            writing_id = str(meta.get("id") or parts[1])
+            results.append({**meta, "id": writing_id, "files": _writing_files(project_id, writing_id), "_path": p})
         except Exception:
             continue
     return results
@@ -232,8 +240,7 @@ def get_writing_project(
         meta = dict(post.metadata)
     except FileNotFoundError:
         raise HTTPException(404)
-    all_paths = list_project_dir(project_id, f"writing/{writing_id}")
-    return {**meta, "files": all_paths}
+    return {**meta, "files": _writing_files(project_id, writing_id)}
 
 
 @router.patch("/{writing_id}")

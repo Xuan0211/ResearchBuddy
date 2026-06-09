@@ -14,7 +14,7 @@ from . import frontmatter as fm
 from .project_fs import list_project_dir, project_worktree, read_project_file
 from .skills_service import get_skill, list_skills, slugify
 
-ALLOWED_SECTIONS = {"papers", "meetings", "coding", "workspace", "writing", "docs", "images", "prototype"}
+ALLOWED_SECTIONS = {"papers", "meetings", "coding", "workspace", "writing", "docs", "images", "prototype", "skills"}
 MAX_RESOURCE_BYTES = 25 * 1024 * 1024
 DOCS_ROOT = "docs"
 
@@ -57,6 +57,7 @@ def _resource_root(section: str, scope: str = "") -> str:
         "docs": "docs",
         "images": "assets/images",
         "prototype": "prototypes",
+        "skills": "skills",
     }[section]
 
 

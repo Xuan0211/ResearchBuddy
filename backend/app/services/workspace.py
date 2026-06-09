@@ -132,6 +132,9 @@ def ensure_workspace(project_id: str, project_name: str = "") -> dict[str, Any]:
             "docs/docs",
             "docs/skills",
             "docs/files",
+            "skills/docs",
+            "skills/skills",
+            "skills/files",
             "prototypes/docs",
             "prototypes/skills",
             "prototypes/files",
@@ -186,6 +189,8 @@ def _is_module_resource_path(path: str) -> bool:
     parts = path.split("/")
     resource_dirs = {"skills", "docs", "files"}
     if len(parts) >= 3 and parts[0] in {"papers", "meetings", "coding", "prototypes", "workspace"} and parts[1] in resource_dirs:
+        return True
+    if len(parts) >= 3 and parts[0] == "skills" and parts[1] in resource_dirs:
         return True
     if len(parts) >= 3 and parts[0] == "docs" and parts[1] in {"skills", "files"}:
         return True

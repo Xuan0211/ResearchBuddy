@@ -1,10 +1,10 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
-import { BookOpen, ChevronRight, FileText, Plus, Trash2, X } from "lucide-react"
+import { BookOpen, ChevronRight, FileText, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document, ProjectSkill, SectionResourceDoc, SectionResources } from "@/lib/types"
 
-type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "images" | "prototype"
+type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "images" | "prototype" | "skills"
 
 type Props = {
   projectId: string
@@ -25,8 +25,6 @@ export default function SectionResourcesPanel({
   const [skills, setSkills] = useState<ProjectSkill[]>([])
   const [projectDocs, setProjectDocs] = useState<(Document & { folder?: string; _path?: string })[]>([])
   const [loading, setLoading] = useState(true)
-  const [showDocForm, setShowDocForm] = useState(false)
-  const [docForm, setDocForm] = useState({ title: "", content: "" })
   const [editingDoc, setEditingDoc] = useState<SectionResourceDoc | null>(null)
   const [selectedSkill, setSelectedSkill] = useState("")
   const [selectedDocPath, setSelectedDocPath] = useState("")
@@ -71,14 +69,6 @@ export default function SectionResourcesPanel({
       }))
       .filter(doc => !attachedDocPaths.has(doc.path))
   }, [attachedDocPaths, projectDocs])
-
-  async function createDoc(e: React.FormEvent) {
-    e.preventDefault()
-    await api.post(resourcePath("/docs"), docForm)
-    setDocForm({ title: "", content: "" })
-    setShowDocForm(false)
-    await load()
-  }
 
   async function saveDoc(e: React.FormEvent) {
     e.preventDefault()
@@ -137,15 +127,8 @@ export default function SectionResourcesPanel({
       <div className={compact ? "px-3 py-2" : "border-b px-4 py-3"}>
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h3 className="truncate text-sm font-medium">{title ?? "Docs & skills"}</h3>
-            {!compact && <p className="mt-0.5 text-xs text-gray-400">Local folder: {resources.local_root}/</p>}
+            <h3 className="truncate text-sm font-medium">{title ?? "Attach resources"}</h3>
           </div>
-          <button
-            onClick={() => setShowDocForm(v => !v)}
-            className="inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs text-gray-700 hover:bg-gray-50"
-          >
-            <Plus size={13} /> Doc
-          </button>
         </div>
       </div>
 
@@ -183,30 +166,6 @@ export default function SectionResourcesPanel({
               </button>
             </div>
           </div>
-
-          {showDocForm && (
-            <form onSubmit={createDoc} className="space-y-2">
-              <input
-                autoFocus
-                value={docForm.title}
-                onChange={e => setDocForm({ ...docForm, title: e.target.value })}
-                placeholder="Local doc title"
-                required
-                className="w-full rounded-md border px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-black"
-              />
-              <textarea
-                value={docForm.content}
-                onChange={e => setDocForm({ ...docForm, content: e.target.value })}
-                placeholder="Optional markdown content"
-                rows={compact ? 3 : 4}
-                className="w-full rounded-md border px-3 py-2 text-sm focus:outline-none"
-              />
-              <div className="flex gap-2">
-                <button type="submit" className="rounded-md bg-black px-3 py-1.5 text-xs text-white">Create</button>
-                <button type="button" onClick={() => setShowDocForm(false)} className="text-xs text-gray-400 hover:text-black">Cancel</button>
-              </div>
-            </form>
-          )}
 
           {resources.doc_refs.length > 0 && (
             <ul className="space-y-2">
