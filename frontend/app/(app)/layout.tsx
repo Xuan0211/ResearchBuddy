@@ -3,6 +3,7 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { auth } from "@/lib/api"
+import SyncNotification from "@/components/SyncNotification"
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -28,6 +29,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </header>
       <main className="flex-1 overflow-hidden">{children}</main>
+      <SyncNotification />
     </div>
   )
 }
