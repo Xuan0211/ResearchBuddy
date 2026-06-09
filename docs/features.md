@@ -45,7 +45,7 @@ ResearchBuddy 是一个为研究团队设计的协作平台。每个项目是一
 - 复制 BibTeX key（`[[paper_id]]` 格式用于在文档中引用）
 - 论文笔记 — 每篇论文有 Markdown 笔记编辑器
 - 笔记同步到 Google Drive（以 Markdown 文件形式）
-- **AI Generated 区** — 展示 Writing 项目中 `ai-generated.bib` 的待确认文献，可一键确认移入 `reference.bib`
+- **AI Generated 区** — 展示 Writing 项目中 `bibs/ai_generated.bib` 的待确认文献，可一键确认移入 `bibs/references.read_only.bib`
 
 **Zotero 配置：**
 - 每个项目可绑定不同的 Zotero 库（个人库或 Group 库）
@@ -114,21 +114,24 @@ Rich Markdown 编辑器，支持多标签页：
 
 **项目结构（自动初始化）：**
 ```
-writing/<project-name>/
-├── main.tex              # ACM Conference 格式主文件
-├── reference.bib         # Zotero 同步的可信文献（AI 只读）
-├── ai-generated.bib      # AI 建议的待确认文献
+writing/Project/<project-name>/
+├── manifest.read_only.json   # 项目信息（系统写入）
+├── main.tex                  # ACM Conference 格式主文件
+├── bibs/
+│   ├── references.read_only.bib  # Zotero 同步的可信文献（AI 只读）
+│   └── ai_generated.bib          # AI 建议的待确认文献
 ├── sections/
 │   └── introduction.tex
 ├── images/
+├── other/
 └── skills/
-    ├── paper-writing-core.md
-    └── citation-management.md
+    ├── paper-writing-core/SKILL.md
+    └── citation-management/SKILL.md
 ```
 
 **两层引用体系：**
-- `reference.bib` — 由 Zotero 管理，受写保护，使用 `\cite{key}`
-- `ai-generated.bib` — AI Agent 可以写入，使用 `\aicite{key}`（PDF 中渲染为彩色）
+- `bibs/references.read_only.bib` — 由 Zotero 管理，受写保护，使用 `\cite{key}`
+- `bibs/ai_generated.bib` — AI Agent 可以写入，使用 `\aicite{key}`（PDF 中渲染为彩色）
 - 彩色宏：`\newcommand{\aicite}[1]{\textcolor{Dandelion}{\cite{#1}}}` — 注释掉这行即可关闭颜色
 
 **外部链接：**
@@ -140,9 +143,9 @@ writing/<project-name>/
 - 点击文件查看内容
 
 **AI 写作规则（写在 skills/ 里）：**
-- AI 只能写 `sections/*.tex` 和 `ai-generated.bib`
+- AI 只能写 `sections/*.tex` 和 `bibs/ai_generated.bib`
 - 修改笔记时必须标注 `> [AI note — YYYY-MM-DD]: ...`
-- 不允许修改 `reference.bib` 和 `main.tex` 的结构部分
+- 不允许修改 `bibs/references.read_only.bib` 和 `main.tex` 的结构部分
 
 ---
 
@@ -173,9 +176,12 @@ writing/<project-name>/
 
 ## 🛠 Workspace（工作区）
 
-基于 git 的项目文件管理：
+基于 git 的项目文件管理（v2 结构）：
 
-- **目录结构** — `papers/`, `docs/`, `meetings/`, `writing/`, `prototypes/`, `assets/`, `team/`, `skills/`
+- **目录结构** — `papers/notes/`, `document/docs/`, `meetings/mygdocs/`, `writing/Project/`, `coding/Project/`, `images/`, `prototype/`, `skills/`
+- **文件树预览** — 折叠式查看项目 git 仓库中的所有文件（当前 HEAD）
+- **Clone 与 Push 指令** — 一键复制克隆或推送命令；用账号密码或 API Key 认证
+- **版本历史** — 列出所有用户 git push 的提交（不含 ResearchBuddy 内部写入），支持一键回滚到任意版本
 - **文件索引** — `.researchbuddy/index.json` 维护全项目文件清单
 - **Ensure** — 初始化/修复目录结构
 - **Google Drive 根目录设置** — 为项目绑定 Drive 文件夹（支持新建、使用已有、或默认创建 `ResearchBuddy/<项目名>/`）
@@ -229,8 +235,10 @@ writing/<project-name>/
 ResearchBuddy 的项目仓库对 Agent 完全可读：
 
 - 用 `git clone https://research.hopeyuanxu.com/git/<project-id>` 拉取内容
-- 论文通过 `[[paper_id]]` 跨引用，BibTeX 在论文文件的 frontmatter 中
+- 论文笔记在 `papers/notes/<citationkey>.md`，BibTeX 在笔记文件的 frontmatter 中
+- 会议记录在 `meetings/mygdocs/<id>.md`，文档在 `document/docs/<id>.md`
+- 写作项目在 `writing/Project/<id>/`，LaTeX 主文件是 `main.tex`
 - `.researchbuddy/index.json` 是全项目的文件索引
-- `writing/skills/` 里有平台预置的写作规则，Agent 应优先读取
+- `skills/` 里有平台预置的写作规则，Agent 应优先读取
 - 修改内容后 push 到仓库，ResearchBuddy UI 会实时更新
-- AI 不能修改 `reference.bib`，只能写 `ai-generated.bib`
+- AI 不能修改 `bibs/references.read_only.bib`，只能写 `bibs/ai_generated.bib`

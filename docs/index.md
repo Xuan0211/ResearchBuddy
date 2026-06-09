@@ -13,6 +13,7 @@ title: ResearchBuddy 文档中心
 | [deployment](deployment) | 生产环境部署、更新、回滚 |
 | [data](data) | 数据持久化、备份、恢复 |
 | [development](development) | 本地开发环境搭建与工作流 |
+| [features](features) | 功能介绍（含 v2 目录结构） |
 
 ## 项目概览
 
