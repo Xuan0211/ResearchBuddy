@@ -151,8 +151,10 @@ export interface WritingProject {
 export interface MeetingSettings {
   default_location: string
   recurring_weekday: number | null
+  recurring_frequency: string
   recurring_time: string
   recurring_duration_minutes: number
+  default_attendees: string[]
 }
 
 export interface CodebookCriterion {

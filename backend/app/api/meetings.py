@@ -48,8 +48,10 @@ WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturd
 class MeetingSettings(BaseModel):
     default_location: str = ""
     recurring_weekday: int | None = None  # 0=Mon..6=Sun
+    recurring_frequency: str = "weekly"  # "weekly" or "biweekly"
     recurring_time: str = ""  # "HH:MM"
     recurring_duration_minutes: int = 60
+    default_attendees: list[str] = []  # list of handles
 
 
 def _load_meeting_settings(project_id: str) -> MeetingSettings:
@@ -76,6 +78,29 @@ def _next_weekday_date(weekday: int) -> date:
     if days_ahead <= 0:
         days_ahead += 7
     return today + timedelta(days=days_ahead)
+
+
+def _parse_date_safe(s: str) -> date | None:
+    try:
+        return date.fromisoformat(str(s))
+    except Exception:
+        return None
+
+
+def _next_biweekly_date(weekday: int, meetings_meta: list[dict]) -> date:
+    """Return the next biweekly occurrence of weekday anchored to past meetings."""
+    today = date.today()
+    same_day = [
+        d for m in meetings_meta
+        if (d := _parse_date_safe(m.get("date", ""))) and d.weekday() == weekday
+    ]
+    if same_day:
+        last = max(same_day)
+        candidate = last + timedelta(weeks=2)
+        while candidate <= today:
+            candidate += timedelta(weeks=2)
+        return candidate
+    return _next_weekday_date(weekday)
 
 
 class MeetingIn(BaseModel):
@@ -298,7 +323,10 @@ def list_meetings(
     settings = _load_meeting_settings(project_id)
     next_date = None
     if settings.recurring_weekday is not None:
-        next_date = _next_weekday_date(settings.recurring_weekday).isoformat()
+        if settings.recurring_frequency == "biweekly":
+            next_date = _next_biweekly_date(settings.recurring_weekday, meetings).isoformat()
+        else:
+            next_date = _next_weekday_date(settings.recurring_weekday).isoformat()
 
     return {"meetings": meetings, "next_meeting_date": next_date, "settings": settings.model_dump()}
 
@@ -318,9 +346,12 @@ def create_meeting(
     location = body.location
     start_time = body.start_time
     end_time = body.end_time
+    attendees = body.attendees or []
 
     if not location and mtg_settings.default_location:
         location = mtg_settings.default_location
+    if not attendees and mtg_settings.default_attendees:
+        attendees = [f"@{h}" if not h.startswith("@") else h for h in mtg_settings.default_attendees]
     if not start_time and mtg_settings.recurring_time:
         start_time = mtg_settings.recurring_time
     if not end_time and mtg_settings.recurring_time and mtg_settings.recurring_duration_minutes:
@@ -339,7 +370,7 @@ def create_meeting(
         "start_time": start_time,
         "end_time": end_time,
         "location": location,
-        "attendees": body.attendees,
+        "attendees": attendees,
         "document_type": "meeting",
         "links": {
             "google_drive": body.google_drive,
@@ -897,23 +928,35 @@ async def sync_mtg_log(
     for mp in all_mappings:
         mappings_by_id[mp.item_id] = mp
 
-    # Build MTG LOG markdown
-    rows: list[str] = ["| Date | Title | Notes |", "|---|---|---|"]
+    # Build MTG LOG markdown — heading-per-meeting format
+    sections: list[str] = []
     for m in meetings_meta:
-        date = m.get("date", "")
+        mtg_date = m.get("date", "")
         title = m.get("title", "")
         mtg_id = m.get("id", "")
+        start = m.get("start_time", "")
+        end = m.get("end_time", "")
+        location = m.get("location", "")
+        attendees = m.get("attendees") or []
         mapping = mappings_by_id.get(mtg_id)
-        if mapping and mapping.drive_link:
-            link_cell = f"[Open ↗]({mapping.drive_link})"
-        else:
-            link_cell = "—"
-        rows.append(f"| {date} | {title} | {link_cell} |")
+        drive_link = mapping.drive_link if mapping and mapping.drive_link else None
+
+        lines = [f"## {mtg_date} — {title}"]
+        if start:
+            time_str = f"{start}–{end}" if end else start
+            lines.append(f"**Time:** {time_str}")
+        if location:
+            lines.append(f"**Location:** {location}")
+        if attendees:
+            lines.append(f"**Attendees:** {', '.join(str(a) for a in attendees)}")
+        if drive_link:
+            lines.append(f"**Notes:** [Open ↗]({drive_link})")
+        sections.append("\n".join(lines))
 
     log_content = (
         "# Meeting Log\n\n"
         f"_Last updated by ResearchBuddy. {len(meetings_meta)} meeting(s)._\n\n"
-        + "\n".join(rows)
+        + "\n\n---\n\n".join(sections)
         + "\n"
     )
 

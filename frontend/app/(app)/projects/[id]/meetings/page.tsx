@@ -1,20 +1,41 @@
 "use client"
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, Pencil, Plus, RefreshCw, Settings, Trash2, X } from "lucide-react"
+import { BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, MapPin, Pencil, Plus, RefreshCw, Trash2, Users, X } from "lucide-react"
 import { api } from "@/lib/api"
-import type { Contact, Meeting } from "@/lib/types"
-
-interface MeetingSettings {
-  default_location: string
-  recurring_weekday: number | null
-  recurring_time: string
-  recurring_duration_minutes: number
-}
-
-const WEEKDAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
+import type { Contact, Meeting, MeetingSettings } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
 import SectionResourcesPanel from "@/components/SectionResourcesPanel"
+
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+const WEEKDAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+const DEFAULT_SETTINGS: MeetingSettings = {
+  default_location: "",
+  recurring_weekday: null,
+  recurring_frequency: "weekly",
+  recurring_time: "",
+  recurring_duration_minutes: 60,
+  default_attendees: [],
+}
+
+function pad(n: number) { return String(n).padStart(2, "0") }
+
+function computeDefaultTimes(settings: MeetingSettings) {
+  const now = new Date()
+  if (settings.recurring_time) {
+    const [h, m] = settings.recurring_time.split(":").map(Number)
+    const totalEnd = h * 60 + m + (settings.recurring_duration_minutes || 60)
+    return {
+      start_time: settings.recurring_time,
+      end_time: `${pad(Math.floor(totalEnd / 60) % 24)}:${pad(totalEnd % 60)}`,
+    }
+  }
+  return {
+    start_time: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+    end_time: `${pad((now.getHours() + 1) % 24)}:${pad(now.getMinutes())}`,
+  }
+}
 
 export default function MeetingsPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -28,8 +49,10 @@ export default function MeetingsPage() {
   const [editingContact, setEditingContact] = useState<string | null>(null)
   const [contactForm, setContactForm] = useState({ name: "", email: "", handle: "" })
   const [meetingForm, setMeetingForm] = useState({ date: "", title: "", start_time: "", end_time: "", location: "", attendees: "" })
-  const [showSettings, setShowSettings] = useState(false)
-  const [settings, setSettings] = useState<MeetingSettings>({ default_location: "", recurring_weekday: null, recurring_time: "", recurring_duration_minutes: 60 })
+  const [settings, setSettings] = useState<MeetingSettings>(DEFAULT_SETTINGS)
+  const [settingsDraft, setSettingsDraft] = useState<MeetingSettings>(DEFAULT_SETTINGS)
+  const [settingsDirty, setSettingsDirty] = useState(false)
+  const [savingSettings, setSavingSettings] = useState(false)
   const [nextMeetingDate, setNextMeetingDate] = useState<string | null>(null)
   const [syncingLog, setSyncingLog] = useState(false)
   const [logLink, setLogLink] = useState<string | null>(null)
@@ -43,12 +66,28 @@ export default function MeetingsPage() {
       setMeetings(res.meetings)
       setNextMeetingDate(res.next_meeting_date)
       setSettings(res.settings)
+      setSettingsDraft(res.settings)
       setContacts(ctcts)
       if (ctcts.length > 0) setContactsOpen(true)
-      // Pre-fill new meeting date from next_meeting_date
-      if (res.next_meeting_date) setMeetingForm(f => ({ ...f, date: res.next_meeting_date! }))
     }).finally(() => setLoading(false))
   }, [projectId])
+
+  function openNewMeeting() {
+    const today = new Date().toISOString().split("T")[0]
+    const times = computeDefaultTimes(settings)
+    const attendeesStr = settings.default_attendees?.length
+      ? settings.default_attendees.map(h => h.startsWith("@") ? h : `@${h}`).join(", ")
+      : ""
+    setMeetingForm({
+      date: nextMeetingDate || today,
+      title: "",
+      start_time: times.start_time,
+      end_time: times.end_time,
+      location: settings.default_location || "",
+      attendees: attendeesStr,
+    })
+    setShowMeetingForm(true)
+  }
 
   async function saveContact(e: React.FormEvent) {
     e.preventDefault()
@@ -76,10 +115,23 @@ export default function MeetingsPage() {
     setContacts(prev => prev.filter(c => c.handle !== handle))
   }
 
-  async function saveSettings(e: React.FormEvent) {
-    e.preventDefault()
-    await api.patch(`/api/projects/${projectId}/meetings/settings`, settings)
-    setShowSettings(false)
+  function patchDraft(patch: Partial<MeetingSettings>) {
+    setSettingsDraft(prev => ({ ...prev, ...patch }))
+    setSettingsDirty(true)
+  }
+
+  async function saveSettings() {
+    setSavingSettings(true)
+    try {
+      await api.patch(`/api/projects/${projectId}/meetings/settings`, settingsDraft)
+      setSettings(settingsDraft)
+      setSettingsDirty(false)
+      // Refresh next meeting date
+      const res = await api.get<{ meetings: Meeting[]; next_meeting_date: string | null; settings: MeetingSettings }>(`/api/projects/${projectId}/meetings`)
+      setNextMeetingDate(res.next_meeting_date)
+    } finally {
+      setSavingSettings(false)
+    }
   }
 
   async function syncMtgLog() {
@@ -98,9 +150,9 @@ export default function MeetingsPage() {
       attendees: meetingForm.attendees.split(",").map(s => s.trim()).filter(Boolean),
     })
     setShowMeetingForm(false)
-    setMeetingForm({ date: "", title: "", start_time: "", end_time: "", location: "", attendees: "" })
-    const updated = await api.get<Meeting[]>(`/api/projects/${projectId}/meetings`)
-    setMeetings(updated)
+    const res = await api.get<{ meetings: Meeting[]; next_meeting_date: string | null; settings: MeetingSettings }>(`/api/projects/${projectId}/meetings`)
+    setMeetings(res.meetings)
+    setNextMeetingDate(res.next_meeting_date)
   }
 
   async function downloadIcs(m: Meeting) {
@@ -116,6 +168,14 @@ export default function MeetingsPage() {
     await api.delete(`/api/projects/${projectId}/meetings/${m.id}`)
     setMeetings(prev => prev.filter(item => item.id !== m.id))
   }
+
+  const recurringLabel = (() => {
+    if (settings.recurring_weekday === null) return null
+    const freq = settings.recurring_frequency === "biweekly" ? "Every 2 weeks" : "Every week"
+    const day = WEEKDAYS[settings.recurring_weekday]
+    const time = settings.recurring_time ? ` · ${settings.recurring_time}` : ""
+    return `${freq} · ${day}${time}`
+  })()
 
   const ContactRow = ({ c }: { c: Contact }) => {
     const isEditing = editingContact === c.handle
@@ -154,12 +214,135 @@ export default function MeetingsPage() {
   }
 
   return (
-    <div className="p-6 max-w-5xl space-y-5">
+    <div className="p-6 max-w-3xl space-y-5">
       <div>
         <h3 className="font-medium text-sm">Meetings</h3>
       </div>
 
       <SectionResourcesPanel projectId={projectId} section="meetings" />
+
+      {/* ── Meeting Settings (permanent card) ── */}
+      <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">
+        <div className="px-4 py-3 border-b border-gray-50">
+          <p className="text-sm font-medium">Meeting defaults</p>
+          {recurringLabel && (
+            <p className="text-[11px] text-gray-400 mt-0.5">{recurringLabel}{nextMeetingDate ? ` · Next: ${nextMeetingDate}` : ""}</p>
+          )}
+        </div>
+        <div className="px-4 py-3 space-y-3">
+          {/* Recurring row */}
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1">Recurring</label>
+              <select
+                value={settingsDraft.recurring_weekday === null ? "none" : settingsDraft.recurring_frequency}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === "none") patchDraft({ recurring_weekday: null })
+                  else patchDraft({ recurring_frequency: v, recurring_weekday: settingsDraft.recurring_weekday ?? 0 })
+                }}
+                className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none"
+              >
+                <option value="none">No recurring</option>
+                <option value="weekly">Every week</option>
+                <option value="biweekly">Every 2 weeks</option>
+              </select>
+            </div>
+            {settingsDraft.recurring_weekday !== null && (
+              <div>
+                <label className="block text-[11px] font-medium text-gray-500 mb-1">Day</label>
+                <select
+                  value={settingsDraft.recurring_weekday}
+                  onChange={e => patchDraft({ recurring_weekday: Number(e.target.value) })}
+                  className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none"
+                >
+                  {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+                </select>
+              </div>
+            )}
+            {settingsDraft.recurring_weekday !== null && (
+              <div>
+                <label className="block text-[11px] font-medium text-gray-500 mb-1">Time</label>
+                <input type="time" value={settingsDraft.recurring_time}
+                  onChange={e => patchDraft({ recurring_time: e.target.value })}
+                  className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              </div>
+            )}
+          </div>
+
+          {/* Duration + Location row */}
+          <div className="grid grid-cols-2 gap-3">
+            {settingsDraft.recurring_weekday !== null && (
+              <div>
+                <label className="block text-[11px] font-medium text-gray-500 mb-1">Duration (min)</label>
+                <input type="number" value={settingsDraft.recurring_duration_minutes} min={15} step={15}
+                  onChange={e => patchDraft({ recurring_duration_minutes: Number(e.target.value) })}
+                  className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+              </div>
+            )}
+            <div>
+              <label className="block text-[11px] font-medium text-gray-500 mb-1 flex items-center gap-1"><MapPin size={10} /> Default location</label>
+              <input value={settingsDraft.default_location}
+                onChange={e => patchDraft({ default_location: e.target.value })}
+                placeholder="Zoom, Room 301…"
+                className="w-full border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+            </div>
+          </div>
+
+          {/* Default attendees */}
+          <div>
+            <label className="block text-[11px] font-medium text-gray-500 mb-1.5 flex items-center gap-1"><Users size={10} /> Default attendees</label>
+            <div className="flex flex-wrap gap-1.5">
+              {contacts.map(c => {
+                const selected = settingsDraft.default_attendees?.includes(c.handle)
+                return (
+                  <button
+                    key={c.handle}
+                    type="button"
+                    onClick={() => {
+                      const current = settingsDraft.default_attendees || []
+                      patchDraft({
+                        default_attendees: selected
+                          ? current.filter(h => h !== c.handle)
+                          : [...current, c.handle]
+                      })
+                    }}
+                    className={`inline-flex items-center gap-1 text-[11px] rounded-full px-2.5 py-0.5 font-mono transition-colors ${
+                      selected
+                        ? "bg-black text-white"
+                        : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+                    }`}
+                  >
+                    @{c.handle}
+                  </button>
+                )
+              })}
+              {contacts.length === 0 && (
+                <span className="text-[11px] text-gray-400">Add contacts in the Team section below</span>
+              )}
+            </div>
+          </div>
+
+          {settingsDirty && (
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={saveSettings}
+                disabled={savingSettings}
+                className="bg-black text-white text-xs px-3 py-1.5 rounded-lg disabled:opacity-50"
+              >
+                {savingSettings ? "Saving…" : "Save"}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setSettingsDraft(settings); setSettingsDirty(false) }}
+                className="text-xs text-gray-500 px-3"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* ── Team / Contacts ── */}
       <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -205,12 +388,9 @@ export default function MeetingsPage() {
         )}
       </div>
 
-      {/* ── Meetings ── */}
+      {/* ── Meeting timeline header ── */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <h3 className="font-medium text-sm">Meeting schedule</h3>
-          {nextMeetingDate && <span className="text-xs text-gray-400">Next: {nextMeetingDate}</span>}
-        </div>
+        <h3 className="font-medium text-sm">Schedule</h3>
         <div className="flex items-center gap-2">
           {logLink && (
             <a href={logLink} target="_blank" rel="noreferrer"
@@ -223,57 +403,14 @@ export default function MeetingsPage() {
             <RefreshCw size={11} className={syncingLog ? "animate-spin" : ""} />
             {syncingLog ? "Syncing…" : "Sync Log"}
           </button>
-          <button onClick={() => setShowSettings(v => !v)}
-            className="p-1.5 rounded-lg border text-gray-500 hover:bg-gray-50">
-            <Settings size={13} />
-          </button>
-          <button onClick={() => setShowMeetingForm(v => !v)}
+          <button onClick={openNewMeeting}
             className="inline-flex items-center gap-1.5 bg-black text-white text-xs px-3 py-1.5 rounded-lg">
             <CalendarPlus size={13} /> New meeting
           </button>
         </div>
       </div>
 
-      {showSettings && (
-        <form onSubmit={saveSettings} className="border rounded-xl p-4 bg-white shadow-sm space-y-3">
-          <p className="text-xs font-semibold text-gray-600">Meeting Settings</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Default location / room</label>
-              <input value={settings.default_location}
-                onChange={e => setSettings(s => ({ ...s, default_location: e.target.value }))}
-                placeholder="Zoom, Room 301…"
-                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Recurring day</label>
-              <select value={settings.recurring_weekday ?? ""}
-                onChange={e => setSettings(s => ({ ...s, recurring_weekday: e.target.value === "" ? null : Number(e.target.value) }))}
-                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none">
-                <option value="">None</option>
-                {WEEKDAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Recurring time</label>
-              <input type="time" value={settings.recurring_time}
-                onChange={e => setSettings(s => ({ ...s, recurring_time: e.target.value }))}
-                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-gray-500 mb-1">Duration (minutes)</label>
-              <input type="number" value={settings.recurring_duration_minutes} min={15} step={15}
-                onChange={e => setSettings(s => ({ ...s, recurring_duration_minutes: Number(e.target.value) }))}
-                className="w-full border rounded-lg px-2 py-1.5 text-sm focus:outline-none" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button type="submit" className="bg-black text-white text-xs px-3 py-1.5 rounded-lg">Save</button>
-            <button type="button" onClick={() => setShowSettings(false)} className="text-xs text-gray-500 px-3">Cancel</button>
-          </div>
-        </form>
-      )}
-
+      {/* ── New meeting form ── */}
       {showMeetingForm && (
         <form onSubmit={createMeeting} className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-sm">
           <div className="grid grid-cols-2 gap-3">
@@ -314,7 +451,11 @@ export default function MeetingsPage() {
             <div className="flex flex-wrap gap-1">
               {contacts.map(c => (
                 <button key={c.handle} type="button"
-                  onClick={() => setMeetingForm(prev => ({ ...prev, attendees: [prev.attendees, `@${c.handle}`].filter(Boolean).join(", ") }))}
+                  onClick={() => setMeetingForm(prev => {
+                    const tag = `@${c.handle}`
+                    if (prev.attendees.includes(tag)) return prev
+                    return { ...prev, attendees: [prev.attendees, tag].filter(Boolean).join(", ") }
+                  })}
                   className="text-[10px] rounded-full bg-gray-100 px-2 py-0.5 text-gray-600 hover:bg-gray-200 font-mono">
                   @{c.handle}
                 </button>
@@ -328,39 +469,64 @@ export default function MeetingsPage() {
         </form>
       )}
 
+      {/* ── Timeline ── */}
       {loading && meetings.length === 0 ? (
         <div className="text-sm text-gray-400 flex items-center gap-2"><RefreshCw size={13} className="animate-spin" /> Loading…</div>
       ) : meetings.length === 0 ? (
         <p className="text-sm text-gray-400">No meetings yet.</p>
       ) : (
-        <ul className="space-y-1.5">
-          {meetings.map(m => (
-            <li key={m.id}
-              className="border border-gray-100 rounded-xl px-4 py-3 hover:bg-gray-50 cursor-pointer bg-white shadow-sm transition-colors"
-              onClick={() => router.push(`/projects/${projectId}/meetings/${m.id}`)}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="font-medium text-sm truncate">{m.title}</p>
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    {[m.date, m.start_time, m.location].filter(Boolean).join(" · ")}
-                    {m.attendees?.length ? ` · ${m.attendees.slice(0, 3).join(", ")}${m.attendees.length > 3 ? ` +${m.attendees.length - 3}` : ""}` : ""}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                  <DriveSyncControls projectId={projectId} resource="meetings" itemId={m.id} />
-                  {m.links?.outlook_calendar && (
-                    <a href={m.links.outlook_calendar} target="_blank" rel="noreferrer"
-                      className="text-xs text-blue-500 hover:text-blue-700">
-                      <ExternalLink size={12} />
-                    </a>
-                  )}
-                  <button onClick={() => downloadIcs(m)} className="text-gray-300 hover:text-gray-600 p-1"><Download size={12} /></button>
-                  <button onClick={() => deleteMeeting(m)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={12} /></button>
-                </div>
-              </div>
-            </li>
-          ))}
-        </ul>
+        <div className="relative">
+          {/* vertical line */}
+          <div className="absolute left-[7px] top-3 bottom-3 w-px bg-gray-200" />
+          <ul className="space-y-0">
+            {meetings.map((m, idx) => {
+              const isLast = idx === meetings.length - 1
+              const timeStr = [m.start_time, m.end_time].filter(Boolean).join("–")
+              const meta = [timeStr, m.location].filter(Boolean).join(" · ")
+              const attendeeStr = m.attendees?.length
+                ? m.attendees.slice(0, 4).join(", ") + (m.attendees.length > 4 ? ` +${m.attendees.length - 4}` : "")
+                : ""
+              return (
+                <li key={m.id} className="relative flex gap-4 pb-5">
+                  {/* dot */}
+                  <div className="relative flex-shrink-0 mt-2.5">
+                    <div className="w-3.5 h-3.5 rounded-full bg-white border-2 border-gray-300 z-10 relative" />
+                  </div>
+                  {/* card */}
+                  <div
+                    className="flex-1 border border-gray-100 rounded-xl px-4 py-3 bg-white shadow-sm hover:border-gray-200 hover:shadow cursor-pointer transition-all"
+                    onClick={() => router.push(`/projects/${projectId}/meetings/${m.id}`)}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-[11px] font-mono text-gray-400">{m.date}</span>
+                        </div>
+                        <p className="font-medium text-sm truncate">{m.title}</p>
+                        {(meta || attendeeStr) && (
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {[meta, attendeeStr].filter(Boolean).join(" · ")}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                        <DriveSyncControls projectId={projectId} resource="meetings" itemId={m.id} />
+                        {m.links?.outlook_calendar && (
+                          <a href={m.links.outlook_calendar} target="_blank" rel="noreferrer"
+                            className="text-xs text-blue-500 hover:text-blue-700">
+                            <ExternalLink size={12} />
+                          </a>
+                        )}
+                        <button onClick={() => downloadIcs(m)} className="text-gray-300 hover:text-gray-600 p-1"><Download size={12} /></button>
+                        <button onClick={() => deleteMeeting(m)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={12} /></button>
+                      </div>
+                    </div>
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        </div>
       )}
     </div>
   )
