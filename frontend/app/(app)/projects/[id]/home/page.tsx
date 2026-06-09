@@ -2,7 +2,7 @@
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
-import { Crown, Mail, Plus, Shield, Trash2, UserPlus, X } from "lucide-react"
+import { CalendarClock, CheckCircle2, Crown, Database, ExternalLink, Folder, Mail, Plus, RefreshCw, Shield, Trash2, UserPlus, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Contact, Document, Project, ProjectMember } from "@/lib/types"
 
@@ -61,6 +61,30 @@ interface PersonOption {
   value: string
   label: string
   search: string
+}
+interface DriveRootResponse {
+  configured: boolean
+  settings_path: string
+  root_folder_id: string
+  root_folder_name: string
+  root_folder_link: string
+  source: string
+}
+interface BatchDriveSyncResponse {
+  ok: boolean
+  root: { root_folder_name: string; root_folder_link: string }
+  docs?: { synced: number; failed?: number } | null
+  meetings?: { synced: number; failed?: number } | null
+}
+interface ZoteroConfig {
+  api_key: string
+  library_id: string
+  library_type: "user" | "group"
+  api_key_set?: boolean
+}
+interface HomeSettings {
+  countdown_title: string
+  countdown_target: string
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -184,6 +208,22 @@ export default function HomePage() {
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [docs, setDocs] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
+  const [projectName, setProjectName] = useState("")
+  const [projectSettingsMsg, setProjectSettingsMsg] = useState("")
+  const [projectSettingsError, setProjectSettingsError] = useState("")
+  const [driveConnected, setDriveConnected] = useState<boolean | null>(null)
+  const [driveRoot, setDriveRoot] = useState<DriveRootResponse | null>(null)
+  const [driveMode, setDriveMode] = useState<"default" | "existing" | "new">("default")
+  const [folderUrl, setFolderUrl] = useState("")
+  const [folderName, setFolderName] = useState("")
+  const [parentFolderUrl, setParentFolderUrl] = useState("")
+  const [syncScope, setSyncScope] = useState<"all" | "docs" | "meetings">("all")
+  const [syncMode, setSyncMode] = useState<"mapped" | "new">("mapped")
+  const [syncResult, setSyncResult] = useState<BatchDriveSyncResponse | null>(null)
+  const [zoteroConfig, setZoteroConfig] = useState<ZoteroConfig>({ api_key: "", library_id: "", library_type: "user" })
+  const [homeSettings, setHomeSettings] = useState<HomeSettings>({ countdown_title: "", countdown_target: "" })
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  const [settingsBusy, setSettingsBusy] = useState<"" | "project" | "drive" | "sync" | "zotero" | "home">("")
   const [addTrack, setAddTrack] = useState(false)
   const [trackName, setTrackName] = useState("")
   const [trackColor, setTrackColor] = useState(TRACK_COLORS[0])
@@ -209,8 +249,130 @@ export default function HomePage() {
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).catch(() => [] as Contact[]),
       api.get<ProjectMember[]>(`/api/projects/${projectId}/members`).catch(() => [] as ProjectMember[]),
       api.get<Document[]>(`/api/projects/${projectId}/docs`).catch(() => [] as Document[]),
-    ]).then(([p, g, c, m, d]) => { setProject(p); setGantt(g); setContacts(c); setMembers(m); setDocs(d) }).finally(() => setLoading(false))
+      api.get<{ connected: boolean }>("/api/auth/google-drive/status").catch(() => ({ connected: false })),
+      api.get<DriveRootResponse>(`/api/projects/${projectId}/drive-root`).catch(() => null),
+      api.get<ZoteroConfig>(`/api/projects/${projectId}/zotero`).catch(() => null),
+      api.get<HomeSettings>(`/api/projects/${projectId}/home-settings`).catch(() => ({ countdown_title: "", countdown_target: "" })),
+    ]).then(([p, g, c, m, d, drive, root, zotero, home]) => {
+      setProject(p)
+      setProjectName(p.name)
+      setGantt(g)
+      setContacts(c)
+      setMembers(m)
+      setDocs(d)
+      setDriveConnected(drive.connected)
+      setDriveRoot(root)
+      if (root?.root_folder_name) setFolderName(root.root_folder_name)
+      if (zotero) setZoteroConfig({ api_key: "", library_id: zotero.library_id || "", library_type: zotero.library_type || "user", api_key_set: zotero.api_key_set })
+      setHomeSettings(home)
+    }).finally(() => setLoading(false))
   }, [projectId])
+
+  useEffect(() => {
+    const id = window.setInterval(() => setNowTick(Date.now()), 1000)
+    return () => window.clearInterval(id)
+  }, [])
+
+  function showProjectSettingsMessage(text: string) {
+    setProjectSettingsError("")
+    setProjectSettingsMsg(text)
+  }
+
+  function showProjectSettingsError(err: unknown, fallback: string) {
+    setProjectSettingsMsg("")
+    setProjectSettingsError(err instanceof Error ? err.message : fallback)
+  }
+
+  async function saveProjectName(e: React.FormEvent) {
+    e.preventDefault()
+    setSettingsBusy("project")
+    try {
+      const updated = await api.patch<Project>(`/api/projects/${projectId}`, { name: projectName })
+      setProject(updated)
+      setProjectName(updated.name)
+      showProjectSettingsMessage("Project name updated.")
+    } catch (err) {
+      showProjectSettingsError(err, "Could not update project")
+    } finally {
+      setSettingsBusy("")
+    }
+  }
+
+  async function saveHomeSettings(e: React.FormEvent) {
+    e.preventDefault()
+    setSettingsBusy("home")
+    try {
+      const saved = await api.put<HomeSettings>(`/api/projects/${projectId}/home-settings`, homeSettings)
+      setHomeSettings(saved)
+      showProjectSettingsMessage("Countdown saved.")
+    } catch (err) {
+      showProjectSettingsError(err, "Could not save countdown")
+    } finally {
+      setSettingsBusy("")
+    }
+  }
+
+  async function saveDriveRoot() {
+    setSettingsBusy("drive")
+    try {
+      const root = await api.put<DriveRootResponse>(`/api/projects/${projectId}/drive-root`, {
+        mode: driveMode,
+        folder_url: folderUrl,
+        folder_name: folderName,
+        parent_folder_url: parentFolderUrl,
+      })
+      setDriveRoot({
+        configured: !!root.root_folder_id,
+        settings_path: root.settings_path || ".researchbuddy/drive-settings.json",
+        root_folder_id: root.root_folder_id,
+        root_folder_name: root.root_folder_name,
+        root_folder_link: root.root_folder_link,
+        source: root.source,
+      })
+      setFolderUrl("")
+      setParentFolderUrl("")
+      setSyncResult(null)
+      showProjectSettingsMessage("Google Drive folder saved.")
+    } catch (err) {
+      showProjectSettingsError(err, "Could not save Google Drive folder")
+    } finally {
+      setSettingsBusy("")
+    }
+  }
+
+  async function syncProjectDrive() {
+    setSettingsBusy("sync")
+    try {
+      const result = await api.post<BatchDriveSyncResponse>(`/api/projects/${projectId}/drive/sync`, {
+        scope: syncScope,
+        mode: syncMode,
+      })
+      setSyncResult(result)
+      showProjectSettingsMessage("Google Drive sync finished.")
+    } catch (err) {
+      showProjectSettingsError(err, "Google Drive sync failed")
+    } finally {
+      setSettingsBusy("")
+    }
+  }
+
+  async function saveZotero(e: React.FormEvent) {
+    e.preventDefault()
+    setSettingsBusy("zotero")
+    try {
+      await api.put(`/api/projects/${projectId}/zotero`, {
+        api_key: zoteroConfig.api_key || undefined,
+        library_id: zoteroConfig.library_id,
+        library_type: zoteroConfig.library_type,
+      })
+      setZoteroConfig(config => ({ ...config, api_key: "", api_key_set: true }))
+      showProjectSettingsMessage("Zotero settings saved.")
+    } catch (err) {
+      showProjectSettingsError(err, "Could not save Zotero settings")
+    } finally {
+      setSettingsBusy("")
+    }
+  }
 
   // Compute time range
   const allDates = [
@@ -544,6 +706,14 @@ export default function HomePage() {
 
   const canManageTeam = project?.role === "admin"
   const canEditTimeline = project?.role === "admin" || project?.role === "member"
+  const canEditProjectSettings = project?.role === "admin"
+  const canEditProjectIntegrations = project?.role === "admin" || project?.role === "member"
+  const countdownMs = homeSettings.countdown_target ? new Date(homeSettings.countdown_target).getTime() - nowTick : 0
+  const countdownPast = !!homeSettings.countdown_target && countdownMs <= 0
+  const countdownDays = Math.max(0, Math.floor(countdownMs / DAY_MS))
+  const countdownHours = Math.max(0, Math.floor((countdownMs % DAY_MS) / (60 * 60 * 1000)))
+  const countdownMinutes = Math.max(0, Math.floor((countdownMs % (60 * 60 * 1000)) / (60 * 1000)))
+  const countdownSeconds = Math.max(0, Math.floor((countdownMs % (60 * 1000)) / 1000))
   const docOptions = buildDocOptions(docs)
   const docTree = buildDocTree(docOptions)
   const docById = new Map(docOptions.map(doc => [doc.id, doc]))
@@ -630,6 +800,190 @@ export default function HomePage() {
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div className="flex-1 overflow-auto p-6 space-y-6">
+        <div className="rounded-xl border bg-white shadow-sm">
+          <div className="border-b px-5 py-4">
+            <h2 className="text-lg font-semibold">{project?.name || "Project"}</h2>
+            <p className="mt-0.5 text-xs text-gray-400">Project settings, shared integrations, and countdown live here.</p>
+          </div>
+
+          {(projectSettingsMsg || projectSettingsError) && (
+            <div className={`mx-5 mt-4 flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${projectSettingsError ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
+              <CheckCircle2 size={14} className="mt-0.5" />
+              <p className="whitespace-pre-line">{projectSettingsError || projectSettingsMsg}</p>
+            </div>
+          )}
+
+          <div className="grid gap-5 p-5 xl:grid-cols-2">
+            <form onSubmit={saveProjectName} className="space-y-3">
+              <div>
+                <p className="text-sm font-medium">Project name</p>
+                <p className="mt-0.5 text-xs text-gray-400">Only admins can rename a project.</p>
+              </div>
+              <div className="flex gap-2">
+                <input value={projectName} onChange={e => setProjectName(e.target.value)}
+                  disabled={!canEditProjectSettings}
+                  className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400" />
+                <button disabled={!canEditProjectSettings || settingsBusy === "project"}
+                  className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50">
+                  {settingsBusy === "project" ? "Saving…" : "Save"}
+                </button>
+              </div>
+            </form>
+
+            <form onSubmit={saveHomeSettings} className="space-y-3">
+              <div className="flex items-center gap-2">
+                <CalendarClock size={16} />
+                <div>
+                  <p className="text-sm font-medium">Countdown</p>
+                  <p className="mt-0.5 text-xs text-gray-400">Stored in the project repo for humans and agents.</p>
+                </div>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[1fr_190px_auto]">
+                <input value={homeSettings.countdown_title} onChange={e => setHomeSettings({ ...homeSettings, countdown_title: e.target.value })}
+                  placeholder="Deadline title"
+                  disabled={!canEditTimeline}
+                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                <input type="datetime-local" value={homeSettings.countdown_target} onChange={e => setHomeSettings({ ...homeSettings, countdown_target: e.target.value })}
+                  disabled={!canEditTimeline}
+                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                <button disabled={!canEditTimeline || settingsBusy === "home"}
+                  className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                  Save
+                </button>
+              </div>
+              {homeSettings.countdown_target ? (
+                <div className="rounded-lg bg-gray-950 px-3 py-3 text-white">
+                  <p className="text-xs text-white/60">{homeSettings.countdown_title || "Countdown"}</p>
+                  <p className="mt-1 font-mono text-lg">
+                    {countdownPast ? "Due now" : `${countdownDays}d ${countdownHours}h ${countdownMinutes}m ${countdownSeconds}s`}
+                  </p>
+                </div>
+              ) : (
+                <p className="rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-400">No countdown set.</p>
+              )}
+            </form>
+
+            <section className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Folder size={16} />
+                <div>
+                  <p className="text-sm font-medium">Google Drive</p>
+                  <p className="mt-0.5 text-xs text-gray-400">Choose this project’s Drive folder.</p>
+                </div>
+              </div>
+              <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-500">
+                {driveRoot?.configured ? (
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <p>Bound folder: <b className="text-gray-800">{driveRoot.root_folder_name}</b></p>
+                      <p className="mt-0.5 truncate font-mono text-[11px]">{driveRoot.root_folder_id}</p>
+                    </div>
+                    {driveRoot.root_folder_link && (
+                      <a href={driveRoot.root_folder_link} target="_blank" rel="noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1 text-blue-600 hover:bg-blue-50">
+                        Open <ExternalLink size={11} />
+                      </a>
+                    )}
+                  </div>
+                ) : driveConnected ? (
+                  <span>No Drive folder selected for this project.</span>
+                ) : (
+                  <span>Connect Google Drive in global Settings first.</span>
+                )}
+              </div>
+              <div className="grid gap-2">
+                <select value={driveMode} onChange={e => setDriveMode(e.target.value as any)}
+                  disabled={!canEditProjectIntegrations || !driveConnected}
+                  className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
+                  <option value="default">Use ResearchBuddy / project name</option>
+                  <option value="existing">Use an existing Drive folder</option>
+                  <option value="new">Create a new Drive folder</option>
+                </select>
+                {driveMode === "existing" && (
+                  <input value={folderUrl} onChange={e => setFolderUrl(e.target.value)}
+                    placeholder="Drive folder URL or id"
+                    disabled={!canEditProjectIntegrations || !driveConnected}
+                    className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                )}
+                {driveMode === "new" && (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <input value={folderName} onChange={e => setFolderName(e.target.value)}
+                      placeholder="Folder name"
+                      disabled={!canEditProjectIntegrations || !driveConnected}
+                      className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                    <input value={parentFolderUrl} onChange={e => setParentFolderUrl(e.target.value)}
+                      placeholder="Optional parent folder URL"
+                      disabled={!canEditProjectIntegrations || !driveConnected}
+                      className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={saveDriveRoot}
+                    disabled={!canEditProjectIntegrations || !driveConnected || settingsBusy === "drive"}
+                    className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50">
+                    {settingsBusy === "drive" ? "Saving…" : "Save Drive folder"}
+                  </button>
+                  <select value={syncScope} onChange={e => setSyncScope(e.target.value as any)}
+                    className="rounded-lg border px-2 py-2 text-xs text-gray-600">
+                    <option value="all">Docs and meetings</option>
+                    <option value="docs">Docs only</option>
+                    <option value="meetings">Meetings only</option>
+                  </select>
+                  <select value={syncMode} onChange={e => setSyncMode(e.target.value as any)}
+                    className="rounded-lg border px-2 py-2 text-xs text-gray-600">
+                    <option value="mapped">Update mapped</option>
+                    <option value="new">Create new</option>
+                  </select>
+                  <button type="button" onClick={syncProjectDrive}
+                    disabled={!canEditProjectIntegrations || !driveConnected || settingsBusy === "sync"}
+                    className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                    <RefreshCw size={13} /> {settingsBusy === "sync" ? "Syncing…" : "Sync"}
+                  </button>
+                </div>
+                {syncResult && (
+                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                    Synced to {syncResult.root.root_folder_name}. Docs: {syncResult.docs?.synced ?? 0}; Meetings: {syncResult.meetings?.synced ?? 0}.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            <form onSubmit={saveZotero} className="space-y-3">
+              <div className="flex items-center gap-2">
+                <Database size={16} />
+                <div>
+                  <p className="text-sm font-medium">Zotero</p>
+                  <p className="mt-0.5 text-xs text-gray-400">Project library used by Papers.</p>
+                </div>
+              </div>
+              <div className="grid gap-2">
+                <input value={zoteroConfig.api_key}
+                  onChange={e => setZoteroConfig({ ...zoteroConfig, api_key: e.target.value })}
+                  placeholder={zoteroConfig.api_key_set ? "API key already saved. Leave blank to keep it." : "Zotero API key"}
+                  disabled={!canEditProjectSettings}
+                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                <div className="grid gap-2 sm:grid-cols-[1fr_130px]">
+                  <input value={zoteroConfig.library_id}
+                    onChange={e => setZoteroConfig({ ...zoteroConfig, library_id: e.target.value })}
+                    placeholder="Library ID"
+                    disabled={!canEditProjectSettings}
+                    className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
+                  <select value={zoteroConfig.library_type}
+                    onChange={e => setZoteroConfig({ ...zoteroConfig, library_type: e.target.value as "user" | "group" })}
+                    disabled={!canEditProjectSettings}
+                    className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
+                    <option value="user">User</option>
+                    <option value="group">Group</option>
+                  </select>
+                </div>
+                <button disabled={!canEditProjectSettings || settingsBusy === "zotero"}
+                  className="w-fit rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                  {settingsBusy === "zotero" ? "Saving…" : "Save Zotero"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
 
         {/* ── Gantt Chart ── */}
         <div className="border rounded-xl bg-white shadow-sm overflow-hidden">

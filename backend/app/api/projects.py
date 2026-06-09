@@ -1,4 +1,5 @@
 import secrets
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -15,7 +16,7 @@ from ..models import DriveFileMapping, User, Project, ProjectInvite, ProjectMemb
 from ..services import git_service
 from ..services.contacts import list_contacts as list_project_contacts, upsert_contact
 from ..services.members import ensure_creator_admin, is_project_creator, normalize_email, validate_role
-from ..services.project_fs import list_project_dir, read_project_file
+from ..services.project_fs import list_project_dir, project_worktree, read_project_file
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -23,6 +24,16 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 class ProjectIn(BaseModel):
     name: str
     description: str = ""
+
+
+class ProjectUpdateIn(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class HomeSettingsIn(BaseModel):
+    countdown_title: str = ""
+    countdown_target: str = ""
 
 
 class InviteIn(BaseModel):
@@ -103,6 +114,38 @@ def project_response(project: Project, role: str) -> dict:
         "role": role,
         "zotero_configured": bool(project.zotero_api_key),
         "zotero_last_sync": project.zotero_last_sync,
+    }
+
+
+HOME_SETTINGS_PATH = ".researchbuddy/home-settings.json"
+
+
+def _load_home_settings(project_id: str) -> dict:
+    try:
+        data = json.loads(read_project_file(project_id, HOME_SETTINGS_PATH))
+    except Exception:
+        data = {}
+    return {
+        "countdown_title": str(data.get("countdown_title") or ""),
+        "countdown_target": str(data.get("countdown_target") or ""),
+    }
+
+
+def _save_home_settings(project_id: str, body: HomeSettingsIn) -> dict:
+    data = {
+        "schema": "researchbuddy.home-settings",
+        "version": "0.1",
+        "countdown_title": body.countdown_title.strip(),
+        "countdown_target": body.countdown_target.strip(),
+    }
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Update home settings"
+        path = wt / HOME_SETTINGS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return {
+        "countdown_title": data["countdown_title"],
+        "countdown_target": data["countdown_target"],
     }
 
 
@@ -273,6 +316,55 @@ def get_project(
         raise HTTPException(404, "Project not found")
     member = check_member(project_id, current_user, session)
     return project_response(project, member.role)
+
+
+@router.patch("/{project_id}")
+def update_project(
+    project_id: str,
+    body: ProjectUpdateIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    project = session.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Project not found")
+    member = check_member(project_id, current_user, session, min_role="admin")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(400, "Project name is required")
+        project.name = name
+    if body.description is not None:
+        project.description = body.description
+    session.add(project)
+    session.commit()
+    session.refresh(project)
+    return project_response(project, member.role)
+
+
+@router.get("/{project_id}/home-settings")
+def get_home_settings(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session)
+    return _load_home_settings(project_id)
+
+
+@router.put("/{project_id}/home-settings")
+def set_home_settings(
+    project_id: str,
+    body: HomeSettingsIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not session.get(Project, project_id):
+        raise HTTPException(404, "Project not found")
+    check_member(project_id, current_user, session, min_role="member")
+    return _save_home_settings(project_id, body)
 
 
 @router.get("/{project_id}/drive-root")

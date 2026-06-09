@@ -167,14 +167,20 @@ def get_or_create_folder(service, name: str, parent_id: str | None = None) -> st
     q = f"name='{_drive_query_value(name)}' and mimeType='{FOLDER_MIME}' and trashed=false"
     if parent_id:
         q += f" and '{parent_id}' in parents"
-    results = service.files().list(q=q, fields="files(id)", spaces="drive").execute()
+    results = service.files().list(
+        q=q,
+        fields="files(id)",
+        spaces="drive",
+        supportsAllDrives=True,
+        includeItemsFromAllDrives=True,
+    ).execute()
     files = results.get("files", [])
     if files:
         return files[0]["id"]
     meta: dict = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
     if parent_id:
         meta["parents"] = [parent_id]
-    folder = service.files().create(body=meta, fields="id").execute()
+    folder = service.files().create(body=meta, fields="id", supportsAllDrives=True).execute()
     return folder["id"]
 
 
@@ -182,11 +188,11 @@ def create_folder(service, name: str, parent_id: str | None = None) -> dict:
     meta: dict = {"name": name, "mimeType": FOLDER_MIME}
     if parent_id:
         meta["parents"] = [parent_id]
-    return service.files().create(body=meta, fields="id,name,webViewLink").execute()
+    return service.files().create(body=meta, fields="id,name,webViewLink", supportsAllDrives=True).execute()
 
 
 def get_file(service, file_id: str) -> dict:
-    return service.files().get(fileId=file_id, fields="id,name,mimeType,webViewLink").execute()
+    return service.files().get(fileId=file_id, fields="id,name,mimeType,webViewLink", supportsAllDrives=True).execute()
 
 
 def get_file_modified_time(service, file_id: str) -> datetime | None:

@@ -11,7 +11,8 @@ from ..core.security import (
     hash_password,
     verify_password,
 )
-from ..models import APIKey, User
+from ..models import APIKey, DocumentShare, DriveFileMapping, GoogleDriveToken, PaperImage, Project, ProjectInvite, ProjectMember, User
+from ..services import git_service
 from ..services.members import apply_pending_project_invites, normalize_email
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -30,6 +31,20 @@ class LoginIn(BaseModel):
 
 class APIKeyIn(BaseModel):
     name: str
+
+
+class AccountUpdateIn(BaseModel):
+    name: str
+    email: EmailStr
+
+
+class PasswordUpdateIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class DeleteAccountIn(BaseModel):
+    password: str
 
 
 @router.post("/register", status_code=201)
@@ -60,6 +75,88 @@ def login(body: LoginIn, session: Session = Depends(get_session)):
 @router.get("/me")
 def me(current_user: User = Depends(get_current_user)):
     return {"id": str(current_user.id), "email": current_user.email, "name": current_user.name}
+
+
+@router.patch("/me")
+def update_me(
+    body: AccountUpdateIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    email = normalize_email(str(body.email))
+    existing = session.exec(
+        select(User).where(func.lower(User.email) == email, User.id != current_user.id)
+    ).first()
+    if existing:
+        raise HTTPException(400, "Email already registered")
+    current_user.name = body.name.strip() or current_user.name
+    current_user.email = email
+    session.add(current_user)
+    session.commit()
+    session.refresh(current_user)
+    return {"id": str(current_user.id), "email": current_user.email, "name": current_user.name}
+
+
+@router.patch("/password", status_code=204)
+def update_password(
+    body: PasswordUpdateIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not verify_password(body.current_password, current_user.hashed_password):
+        raise HTTPException(400, "Current password is incorrect")
+    if len(body.new_password) < 8:
+        raise HTTPException(400, "New password must be at least 8 characters")
+    current_user.hashed_password = hash_password(body.new_password)
+    session.add(current_user)
+    session.commit()
+
+
+@router.delete("/me", status_code=204)
+def delete_account(
+    body: DeleteAccountIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if not verify_password(body.password, current_user.hashed_password):
+        raise HTTPException(400, "Password is incorrect")
+
+    owned_projects = session.exec(select(Project).where(Project.created_by == current_user.id)).all()
+    for project in owned_projects:
+        project_id = str(project.id)
+        for row in session.exec(select(ProjectMember).where(ProjectMember.project_id == project.id)).all():
+            session.delete(row)
+        for row in session.exec(select(ProjectInvite).where(ProjectInvite.project_id == project.id)).all():
+            session.delete(row)
+        for row in session.exec(select(DriveFileMapping).where(DriveFileMapping.project_id == project.id)).all():
+            session.delete(row)
+        for row in session.exec(select(DocumentShare).where(DocumentShare.project_id == project.id)).all():
+            session.delete(row)
+        for row in session.exec(select(PaperImage).where(PaperImage.project_id == project.id)).all():
+            session.delete(row)
+        git_service.delete_project_repo(project_id)
+        session.delete(project)
+
+    for row in session.exec(select(ProjectMember).where(ProjectMember.user_id == current_user.id)).all():
+        session.delete(row)
+    for row in session.exec(select(ProjectInvite).where(ProjectInvite.invited_by == current_user.id)).all():
+        session.delete(row)
+    for row in session.exec(select(APIKey).where(APIKey.user_id == current_user.id)).all():
+        session.delete(row)
+    drive_token = session.exec(select(GoogleDriveToken).where(GoogleDriveToken.user_id == current_user.id)).first()
+    if drive_token:
+        session.delete(drive_token)
+    session.delete(current_user)
+    session.commit()
+
+
+@router.post("/delete-account", status_code=204)
+def delete_account_post(
+    body: DeleteAccountIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    return delete_account(body, current_user, session)
 
 
 @router.post("/api-keys", status_code=201)
