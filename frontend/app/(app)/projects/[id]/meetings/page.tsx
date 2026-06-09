@@ -5,7 +5,6 @@ import { BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLi
 import { api } from "@/lib/api"
 import type { Contact, Meeting, MeetingSettings } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 const WEEKDAYS_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
@@ -219,7 +218,6 @@ export default function MeetingsPage() {
         <h3 className="font-medium text-sm">Meetings</h3>
       </div>
 
-      <SectionResourcesPanel projectId={projectId} section="meetings" />
 
       {/* ── Meeting Settings (permanent card) ── */}
       <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">

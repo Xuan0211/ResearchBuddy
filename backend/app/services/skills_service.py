@@ -76,26 +76,14 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
 
 
 def _build_attachment_map(project_id: str) -> dict[str, list[str]]:
-    """Return {skill_id: [section, ...]} from module-local skills folders."""
-    section_roots = {
-        "papers": "papers/skills",
-        "meetings": "meetings/skills",
-        "coding": "coding/skills",
-        "workspace": "workspace/skills",
-        "docs": "docs/skills",
-        "images": "assets/images/skills",
-        "prototype": "prototypes/skills",
-    }
+    """Return {skill_id: [section, ...]} from writing project skills."""
+    from ..core.paths import WRITING_BASE
     attachment: dict[str, list[str]] = {}
-    for section, root in section_roots.items():
-        for path in list_project_dir(project_id, root):
-            if not path.endswith(".md") or path.endswith(".gitkeep"):
-                continue
-            sid = path.split("/")[-2] if path.endswith("/SKILL.md") else Path(path).stem
-            attachment.setdefault(sid, []).append(section)
-    for path in list_project_dir(project_id, "writing"):
+    # In v2, only writing projects have per-project skills/ dirs
+    # e.g. writing/Project/{id}/skills/{skill_id}/SKILL.md
+    for path in list_project_dir(project_id, WRITING_BASE):
         parts = path.split("/")
-        if len(parts) >= 4 and parts[2] == "skills" and path.endswith(".md") and not path.endswith(".gitkeep"):
+        if len(parts) >= 5 and parts[3] == "skills" and path.endswith(".md") and not path.endswith(".gitkeep"):
             sid = parts[-2] if path.endswith("/SKILL.md") else Path(path).stem
             attachment.setdefault(sid, []).append("writing")
     return attachment

@@ -1,6 +1,5 @@
 "use client"
 import { useParams } from "next/navigation"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 import ModuleLinksPanel from "@/components/ModuleLinksPanel"
 
 export default function PrototypePage() {
@@ -11,7 +10,6 @@ export default function PrototypePage() {
       <div>
         <h2 className="text-base font-semibold">Prototype</h2>
       </div>
-      <SectionResourcesPanel projectId={projectId} section="prototype" />
       <ModuleLinksPanel
         projectId={projectId}
         section="prototype"

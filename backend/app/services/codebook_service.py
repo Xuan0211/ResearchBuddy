@@ -10,7 +10,7 @@ from typing import Any
 
 from .project_fs import read_project_file, project_worktree
 
-CB_DIR = "coding"
+CB_DIR = "coding/Project"
 
 
 def _utcnow() -> str:
@@ -53,8 +53,8 @@ def list_codebooks(project_id: str) -> list[dict]:
     result: list[dict] = []
     for p in paths:
         parts = p.replace("\\", "/").split("/")
-        if len(parts) >= 3 and parts[2] == "meta.json":
-            cb_id = parts[1]
+        if len(parts) >= 4 and parts[3] == "meta.json":
+            cb_id = parts[2]
             if cb_id in seen:
                 continue
             seen.add(cb_id)

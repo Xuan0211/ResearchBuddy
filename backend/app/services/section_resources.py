@@ -14,9 +14,9 @@ from . import frontmatter as fm
 from .project_fs import list_project_dir, project_worktree, read_project_file
 from .skills_service import get_skill, list_skills, slugify
 
-ALLOWED_SECTIONS = {"papers", "meetings", "coding", "workspace", "writing", "docs", "images", "prototype", "skills"}
+ALLOWED_SECTIONS = {"papers", "meetings", "coding", "writing", "document", "images", "prototype", "skills"}
 MAX_RESOURCE_BYTES = 25 * 1024 * 1024
-DOCS_ROOT = "docs"
+DOCS_ROOT = "document/docs"
 
 
 class ResourceValidationError(ValueError):
@@ -47,16 +47,15 @@ def _resource_root(section: str, scope: str = "") -> str:
     _check_section(section)
     clean_scope = _safe_rel_path(scope, allow_root=True)
     if section == "writing" and clean_scope:
-        return f"writing/{clean_scope}"
+        return f"writing/Project/{clean_scope}"
     return {
         "papers": "papers",
         "meetings": "meetings",
         "coding": "coding",
-        "workspace": "workspace",
         "writing": "writing",
-        "docs": "docs",
-        "images": "assets/images",
-        "prototype": "prototypes",
+        "document": "document",
+        "images": "images",
+        "prototype": "prototype",
         "skills": "skills",
     }[section]
 

@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from ..models import ProjectMember, User
 from .project_fs import read_project_file, project_worktree
 
-CONTACTS_PATH = "team/contacts.json"
+CONTACTS_PATH = "project_info/contacts.json"
 
 
 def _handle(value: str) -> str:

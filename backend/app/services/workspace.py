@@ -1,8 +1,4 @@
-"""Agent-native project workspace helpers.
-
-The project git repo is the source of truth. ResearchBuddy indexes it and keeps
-system metadata under .researchbuddy without making agents depend on the DB.
-"""
+"""Agent-native project workspace helpers (v2 structure)."""
 from __future__ import annotations
 
 import json
@@ -15,23 +11,26 @@ import frontmatter as frontmatter_lib
 import git
 
 from ..core.config import settings
+from ..core.paths import (
+    PAPERS_NOTES_DIR, MEETINGS_DIR, DOCS_DIR,
+    WRITING_BASE, PROJECT_INFO_DIR,
+)
 from .project_fs import project_worktree
 
-WORKSPACE_VERSION = "0.1"
+WORKSPACE_VERSION = "2.0"
 SYSTEM_DIR = ".researchbuddy"
 MANIFEST_PATH = f"{SYSTEM_DIR}/workspace.json"
 INDEX_PATH = f"{SYSTEM_DIR}/index.json"
 
 CONTENT_DIRS = {
-    "papers": "Paper notes and bibliographic metadata",
-    "docs": "Long-form notes, drafts, and shared project documents",
+    "papers": "Paper notes, bibliographic metadata and BibTeX files",
+    "document": "Long-form notes, drafts, and shared project documents",
     "meetings": "Meeting notes and agenda records",
-    "prototypes": "Prototype code, experiments, and design explorations",
-    "writing": "Paper-writing workspace, including LaTeX projects",
-    "assets": "Images, PDFs, datasets, and other binary assets",
-    "team": "Shared contacts, roles, and collaboration metadata",
+    "writing": "Paper-writing workspace (LaTeX projects)",
+    "coding": "Qualitative coding and literature screening projects",
+    "images": "Design assets, figures, and visual resources",
+    "prototype": "Prototype code, experiments, and design explorations",
     "skills": "Reusable agent/team playbooks and local skills",
-    "workspace": "Workspace-level agent instructions, docs, and companion files",
 }
 
 DEFAULT_MANIFEST: dict[str, Any] = {
@@ -39,35 +38,33 @@ DEFAULT_MANIFEST: dict[str, Any] = {
     "version": WORKSPACE_VERSION,
     "source_of_truth": "git-workspace",
     "agent_contract": {
-        "editable": ["papers", "docs", "meetings", "prototypes", "writing", "assets", "team", "skills", "workspace"],
-        "system_owned": [SYSTEM_DIR],
+        "editable": ["papers", "document", "meetings", "writing", "coding", "images", "prototype", "skills"],
+        "system_owned": [SYSTEM_DIR, PROJECT_INFO_DIR],
         "content_format": "markdown-with-yaml-frontmatter",
         "citation_syntax": "[[paper_id]]",
     },
     "folders": CONTENT_DIRS,
+    "v2_paths": {
+        "paper_notes": PAPERS_NOTES_DIR,
+        "meetings": MEETINGS_DIR,
+        "documents": DOCS_DIR,
+        "writing_projects": WRITING_BASE,
+        "coding_projects": "coding/Project",
+        "contacts": f"{PROJECT_INFO_DIR}/contacts.json",
+    },
     "extensions": {
         "paper_writing": {
-            "root": "writing",
+            "root": WRITING_BASE,
             "preferred": ["latex", "markdown"],
+            "bib": "bibs/references.read_only.bib + bibs/ai_generated.bib",
         },
-        "prototype_development": {
-            "root": "prototypes",
-            "preferred": ["web", "notebooks", "scripts"],
+        "coding_analysis": {
+            "root": "coding/Project",
+            "preferred": ["json", "csv"],
         },
         "team_skills": {
             "root": "skills",
             "preferred": ["markdown", "codex-skill"],
-        },
-        "module_resources": {
-            "root": "<module>/skills|docs|files",
-            "preferred": ["codex-skill", "markdown", "json", "assets"],
-            "contract": {
-                "skills": "Each module keeps copied skills in <module>/skills/ so cloned agents can read them locally.",
-                "docs": "Each module keeps supporting docs in <module>/docs/.",
-                "files": "Each module keeps non-markdown companion files in <module>/files/.",
-                "links": "External design/code links live in <module>/links.json.",
-                "writing": "Writing resources are scoped per paper at writing/<writing_id>/skills|docs|files.",
-            },
         },
     },
     "sync": {
@@ -103,41 +100,36 @@ def _load_manifest(project_id: str) -> tuple[dict[str, Any], bool]:
 
 
 def ensure_workspace(project_id: str, project_name: str = "") -> dict[str, Any]:
-    """Create missing Agent workspace folders and system files."""
+    """Create missing v2 workspace folders and system files."""
     created: list[str] = []
     with project_worktree(project_id) as wt:
-        wt.commit_message = "Ensure ResearchBuddy workspace"
+        wt.commit_message = "Ensure ResearchBuddy v2 workspace"
         root = Path(wt.__fspath__())
 
         for rel_dir in [
-            *CONTENT_DIRS.keys(),
             SYSTEM_DIR,
-            "workspace/docs",
-            "workspace/skills",
-            "workspace/files",
-            "assets/images",
-            "assets/images/docs",
-            "assets/images/skills",
-            "assets/images/files",
-            "assets/pdfs",
-            "papers/docs",
-            "papers/skills",
-            "papers/files",
-            "meetings/docs",
-            "meetings/skills",
-            "meetings/files",
-            "coding/docs",
-            "coding/skills",
-            "coding/files",
-            "docs/docs",
-            "docs/skills",
-            "docs/files",
-            "skills/docs",
-            "skills/skills",
-            "skills/files",
-            "prototypes/docs",
-            "prototypes/skills",
-            "prototypes/files",
+            PROJECT_INFO_DIR,
+            "papers/notes",
+            "papers/bib",
+            "papers/images",
+            "papers/resources",
+            "papers/utils.read_only",
+            "meetings/mygdocs",
+            "meetings/resources",
+            "meetings/utils.read_only",
+            "document/docs",
+            "document/images",
+            "document/resources",
+            "document/utils.read_only",
+            "writing/Project",
+            "writing/resources",
+            "writing/utils.read_only",
+            "coding/Project",
+            "coding/resources",
+            "coding/utils.read_only",
+            "images/resources",
+            "prototype/resources",
+            "skills",
         ]:
             path = root / rel_dir
             path.mkdir(parents=True, exist_ok=True)
@@ -159,17 +151,17 @@ def ensure_workspace(project_id: str, project_name: str = "") -> dict[str, Any]:
         if not readme.exists():
             readme.write_text(
                 "# ResearchBuddy Workspace\n\n"
-                "Agents should edit the top-level content folders. ResearchBuddy owns files in this directory, "
-                "including indexes, sync state, and adapter metadata.\n",
+                "Agents should edit the top-level content folders. "
+                "ResearchBuddy owns files in this directory (indexes, sync state, adapter metadata).\n",
                 encoding="utf-8",
             )
             created.append(f"{SYSTEM_DIR}/README.md")
 
-        contacts = root / "team" / "contacts.json"
+        contacts = root / PROJECT_INFO_DIR / "contacts.json"
         if not contacts.exists():
             contacts.parent.mkdir(parents=True, exist_ok=True)
             contacts.write_text('{\n  "contacts": []\n}\n', encoding="utf-8")
-            created.append("team/contacts.json")
+            created.append(f"{PROJECT_INFO_DIR}/contacts.json")
 
     return {"created": created, "manifest": _load_manifest(project_id)[0]}
 
@@ -185,18 +177,21 @@ def _parse_markdown(project_id: str, path: str) -> tuple[dict[str, Any], str, li
         return {}, "", issues
 
 
-def _is_module_resource_path(path: str) -> bool:
+def _is_system_path(path: str) -> bool:
+    """Skip non-content paths in the workspace index."""
     parts = path.split("/")
-    resource_dirs = {"skills", "docs", "files"}
-    if len(parts) >= 3 and parts[0] in {"papers", "meetings", "coding", "prototypes", "workspace"} and parts[1] in resource_dirs:
+    top = parts[0]
+    # system dirs
+    if top in {SYSTEM_DIR, PROJECT_INFO_DIR, ".git"}:
         return True
-    if len(parts) >= 3 and parts[0] == "skills" and parts[1] in resource_dirs:
+    # module support dirs (not user content)
+    if len(parts) >= 2 and parts[1] in {"bib", "images", "resources", "utils.read_only"}:
         return True
-    if len(parts) >= 3 and parts[0] == "docs" and parts[1] in {"skills", "files"}:
+    # writing subproject support dirs
+    if top == "writing" and len(parts) >= 4 and parts[1] == "Project" and parts[3] in {"bibs", "images", "other", "sections"}:
         return True
-    if len(parts) >= 4 and parts[0] == "writing" and parts[2] in resource_dirs:
-        return True
-    if len(parts) >= 4 and parts[0] == "assets" and parts[1] == "images" and parts[2] in resource_dirs:
+    # coding subproject support dirs
+    if top == "coding" and len(parts) >= 4 and parts[1] == "Project" and parts[3] in {"screening", "transcripts", "images"}:
         return True
     return False
 
@@ -213,9 +208,17 @@ def build_workspace_index(project_id: str) -> dict[str, Any]:
         top = path.split("/", 1)[0]
         if top in counts and not path.endswith(".gitkeep"):
             counts[top] += 1
-        if _is_module_resource_path(path):
+        if _is_system_path(path):
             continue
-        if top not in {"papers", "docs", "meetings", "writing", "skills"} or not path.endswith(".md"):
+
+        # Only index Markdown content files from v2 locations
+        is_content = (
+            (path.startswith(PAPERS_NOTES_DIR + "/") and path.endswith(".md")) or
+            (path.startswith(MEETINGS_DIR + "/") and path.endswith(".md")) or
+            (path.startswith(DOCS_DIR + "/") and path.endswith(".md")) or
+            (top == "skills" and path.endswith(".md"))
+        )
+        if not is_content:
             continue
 
         meta, body, parse_issues = _parse_markdown(project_id, path)
@@ -224,7 +227,7 @@ def build_workspace_index(project_id: str) -> dict[str, Any]:
         refs = sorted(set(re.findall(r"\[\[([^\]]+)\]\]", body)))
         items.append({
             "id": item_id,
-            "type": top[:-1] if top.endswith("s") else top,
+            "type": path.split("/")[0],
             "path": path,
             "title": meta.get("title") or item_id,
             "tags": meta.get("tags", []),

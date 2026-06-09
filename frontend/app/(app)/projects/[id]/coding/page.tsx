@@ -4,7 +4,6 @@ import { useParams, useRouter } from "next/navigation"
 import { BookOpen, Plus, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Codebook } from "@/lib/types"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 export default function CodingPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -51,7 +50,6 @@ export default function CodingPage() {
         </button>
       </div>
 
-      <SectionResourcesPanel projectId={projectId} section="coding" />
 
       {creating && (
         <form onSubmit={createCodebook} className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-sm">

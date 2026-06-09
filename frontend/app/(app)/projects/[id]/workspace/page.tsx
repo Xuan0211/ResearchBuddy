@@ -7,7 +7,6 @@ import {
   Terminal, UploadCloud,
 } from "lucide-react"
 import { api } from "@/lib/api"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 // ── types ────────────────────────────────────────────────────────────────────
 
@@ -415,7 +414,6 @@ export default function WorkspacePage() {
           </div>
         </section>
 
-        <SectionResourcesPanel projectId={projectId} section="workspace" />
       </div>
     </div>
   )

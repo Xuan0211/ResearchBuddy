@@ -4,7 +4,6 @@ import { useParams, useRouter } from "next/navigation"
 import { RefreshCw, Settings, Download, Search, Image } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 import ModuleLinksPanel from "@/components/ModuleLinksPanel"
 
 export default function PapersPage() {
@@ -139,7 +138,6 @@ export default function PapersPage() {
       {/* ── Toolbar ── */}
       <div className="border-b bg-white px-4 py-3 flex-shrink-0 space-y-2">
         <h3 className="font-medium text-sm">Papers</h3>
-        <SectionResourcesPanel projectId={projectId} section="papers" />
         <ModuleLinksPanel
           projectId={projectId}
           section="papers"

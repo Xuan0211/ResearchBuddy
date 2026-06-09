@@ -3,7 +3,6 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ExternalLink, FileCode, GitBranch, Plus, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
-import SectionResourcesPanel from "@/components/SectionResourcesPanel"
 
 interface WritingProject {
   id: string; title: string; description: string
@@ -82,7 +81,6 @@ export default function WritingPage() {
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
         <h3 className="text-sm font-semibold">Writing</h3>
-        <SectionResourcesPanel projectId={projectId} section="writing" />
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
