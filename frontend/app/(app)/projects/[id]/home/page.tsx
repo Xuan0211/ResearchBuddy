@@ -68,65 +68,62 @@ const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899
 const ROLE_LABELS: Record<ProjectMember["role"],string> = { admin:"Admin", member:"Can edit", viewer:"Read only" }
 function roleDescription(r: ProjectMember["role"]) { return r==="admin"?"Manage members and edit everything":r==="member"?"Edit project content":"View project content" }
 
-// ── Flip-clock digit ────────────────────────────────────────────────────────────
+// ── Flip-clock digit (white card, black text) ────────────────────────────────────
 function FlipUnit({ value, label }: { value: number; label: string }) {
   const str = String(value).padStart(2, "0")
   const [curr, setCurr] = useState(str)
   const [prev, setPrev] = useState(str)
-  const [phase, setPhase] = useState<"idle"|"top"|"bottom">("idle")
-  const timer = useRef<ReturnType<typeof setTimeout>|null>(null)
+  const [phase, setPhase] = useState<"idle"|"out"|"in">("idle")
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
 
   useEffect(() => {
     if (str === curr) return
-    if (timer.current) clearTimeout(timer.current)
-    setPrev(curr)
-    setPhase("top")
-    timer.current = setTimeout(() => {
-      setCurr(str); setPhase("bottom")
-      timer.current = setTimeout(() => setPhase("idle"), 200)
-    }, 200)
-    return () => { if (timer.current) clearTimeout(timer.current) }
+    timers.current.forEach(clearTimeout); timers.current = []
+    setPrev(curr); setPhase("out")
+    timers.current.push(setTimeout(() => {
+      setCurr(str); setPhase("in")
+      timers.current.push(setTimeout(() => setPhase("idle"), 240))
+    }, 210))
+    return () => { timers.current.forEach(clearTimeout) }
   }, [str])
 
-  const topAnim = phase === "top"  ? { animation: "rbFlipTop 200ms ease-in forwards" }  : {}
-  const botAnim = phase === "bottom" ? { animation: "rbFlipBot 200ms ease-out forwards" } : {}
+  const CARD_W = 76, CARD_H = 96
+  const cardBase: CSSProperties = {
+    position: "absolute", inset: 0, width: CARD_W, height: CARD_H,
+    background: "#fff",
+    borderRadius: 14,
+    border: "1px solid #e5e7eb",
+    boxShadow: "0 1px 3px rgba(0,0,0,0.07), 0 4px 16px rgba(0,0,0,0.05)",
+    display: "flex", alignItems: "center", justifyContent: "center",
+    transformOrigin: "center center",
+  }
+  const numStyle: CSSProperties = {
+    fontFamily: "ui-monospace, 'SF Mono', 'Cascadia Mono', monospace",
+    fontSize: 46, fontWeight: 800, lineHeight: 1,
+    color: "#0f172a", letterSpacing: "-0.03em",
+  }
 
   return (
-    <div className="flex flex-col items-center gap-2">
-      <div className="relative" style={{ perspective: "500px" }}>
-        {/* Background card */}
-        <div className="absolute inset-0 rounded-xl bg-white/5" />
-
-        {/* Top half — current top */}
-        <div className="overflow-hidden rounded-t-xl"
-          style={{ height: "3.5rem", width: "5rem", backgroundColor: "rgba(255,255,255,0.07)" }}>
-          <div className="flex h-28 w-20 items-start justify-center pt-2">
-            <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{phase==="idle"?curr:prev}</span>
-          </div>
-        </div>
-        {/* Divider */}
-        <div className="absolute inset-x-0 z-10" style={{ top:"3.5rem", height:"1px", background:"rgba(0,0,0,0.5)" }} />
-        {/* Bottom half — current bottom */}
-        <div className="overflow-hidden rounded-b-xl"
-          style={{ height: "3.5rem", width: "5rem", backgroundColor: "rgba(255,255,255,0.04)" }}>
-          <div className="flex h-28 w-20 items-end justify-center pb-2">
-            <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{curr}</span>
-          </div>
-        </div>
-
-        {/* Flipping card (animated) */}
-        {phase !== "idle" && (
-          <div
-            className="absolute inset-x-0 z-20 overflow-hidden rounded-xl"
-            style={{ top: 0, height: "7rem", transformOrigin: "center center", ...( phase==="top" ? topAnim : botAnim ), backgroundColor: "rgba(255,255,255,0.07)" }}
-          >
-            <div className="flex h-28 w-20 items-center justify-center">
-              <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{phase==="top"?prev:curr}</span>
-            </div>
+    <div className="flex flex-col items-center gap-3">
+      <div style={{ width: CARD_W, height: CARD_H, position: "relative" }}>
+        {/* Static card — always shows curr */}
+        <div style={cardBase}><span style={numStyle}>{curr}</span></div>
+        {/* Out: prev folds away 0° → -90° */}
+        {phase === "out" && (
+          <div style={{ ...cardBase, animation: "rbFlipOut 210ms ease-in forwards" }}>
+            <span style={numStyle}>{prev}</span>
           </div>
         )}
+        {/* In: curr unfolds 90° → 0° */}
+        {phase === "in" && (
+          <div style={{ ...cardBase, animation: "rbFlipIn 240ms ease-out forwards" }}>
+            <span style={numStyle}>{curr}</span>
+          </div>
+        )}
+        {/* Centre crease line */}
+        <div style={{ position:"absolute", left:0, right:0, top:"50%", height:1, background:"#f1f5f9", zIndex:10, pointerEvents:"none" }} />
       </div>
-      <span className="text-[10px] font-semibold uppercase tracking-widest text-white/40">{label}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</span>
     </div>
   )
 }
@@ -450,10 +447,16 @@ export default function HomePage() {
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <>
-      {/* Global flip animation keyframes */}
+      {/* Flip animation keyframes */}
       <style>{`
-        @keyframes rbFlipTop { 0%{transform:rotateX(0deg);opacity:1} 100%{transform:rotateX(-90deg);opacity:0.2} }
-        @keyframes rbFlipBot { 0%{transform:rotateX(90deg);opacity:0.2} 100%{transform:rotateX(0deg);opacity:1} }
+        @keyframes rbFlipOut {
+          0%   { transform: perspective(600px) rotateX(0deg);   }
+          100% { transform: perspective(600px) rotateX(-90deg); }
+        }
+        @keyframes rbFlipIn {
+          0%   { transform: perspective(600px) rotateX(90deg);  }
+          100% { transform: perspective(600px) rotateX(0deg);   }
+        }
       `}</style>
 
       <div className="h-full overflow-y-auto bg-gray-50">
@@ -494,67 +497,65 @@ export default function HomePage() {
 
         {/* ── 2. Countdown ── */}
         <div
-          className="bg-gray-950 relative overflow-hidden"
+          className="bg-white border-b relative"
           onClick={() => { if (canEdit && !editingCountdown) { setEditingCountdown(true); setCountdownForm(homeSettings) } }}
           style={{ cursor: canEdit && !editingCountdown ? "pointer" : "default" }}
         >
           {editingCountdown ? (
             <form onSubmit={saveCountdown} onClick={e => e.stopPropagation()}
-              className="max-w-lg mx-auto px-6 py-10 space-y-4">
-              <p className="text-white/70 text-sm font-medium mb-6">Set countdown target</p>
-              <div className="space-y-3">
-                <input
-                  autoFocus
-                  value={countdownForm.countdown_title}
-                  onChange={e => setCountdownForm({ ...countdownForm, countdown_title: e.target.value })}
-                  placeholder="Deadline title (e.g. CHI 2027)"
-                  className="w-full rounded-xl bg-white/10 px-4 py-3 text-white placeholder-white/30 text-lg focus:outline-none focus:ring-2 focus:ring-white/30"
-                />
-                <input
-                  type="datetime-local"
-                  value={countdownForm.countdown_target}
-                  onChange={e => setCountdownForm({ ...countdownForm, countdown_target: e.target.value })}
-                  className="w-full rounded-xl bg-white/10 px-4 py-3 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/30"
-                  style={{ colorScheme: "dark" }}
-                />
-              </div>
-              <div className="flex gap-3 pt-2">
+              className="max-w-md mx-auto px-6 py-10 space-y-3">
+              <p className="text-gray-500 text-sm font-medium mb-4">Set countdown target</p>
+              <input
+                autoFocus
+                value={countdownForm.countdown_title}
+                onChange={e => setCountdownForm({ ...countdownForm, countdown_title: e.target.value })}
+                placeholder="Deadline title (e.g. CHI 2027)"
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-gray-900 placeholder-gray-400 text-base focus:outline-none focus:ring-2 focus:ring-gray-900"
+              />
+              <input
+                type="datetime-local"
+                value={countdownForm.countdown_target}
+                onChange={e => setCountdownForm({ ...countdownForm, countdown_target: e.target.value })}
+                className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-gray-900 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900"
+              />
+              <div className="flex gap-3 pt-1">
                 <button type="submit" disabled={countdownBusy}
-                  className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-black hover:bg-gray-100 disabled:opacity-50">
+                  className="rounded-xl bg-gray-900 px-6 py-2.5 text-sm font-semibold text-white hover:bg-black disabled:opacity-50">
                   {countdownBusy ? "Saving…" : "Save"}
                 </button>
                 <button type="button" onClick={() => setEditingCountdown(false)}
-                  className="rounded-xl border border-white/20 px-6 py-2.5 text-sm text-white/60 hover:bg-white/5">
+                  className="rounded-xl border border-gray-200 px-6 py-2.5 text-sm text-gray-500 hover:bg-gray-50">
                   Cancel
                 </button>
               </div>
             </form>
           ) : !homeSettings.countdown_target ? (
-            <div className="py-16 text-center">
-              <p className="text-white/20 text-sm">{canEdit ? "Click to set a deadline countdown" : "No countdown set"}</p>
+            <div className="py-14 text-center">
+              <CalendarClock size={28} className="mx-auto mb-3 text-gray-200" />
+              <p className="text-gray-300 text-sm">{canEdit ? "Click to set a deadline countdown" : "No countdown set"}</p>
             </div>
           ) : (
-            <div className="py-12 px-6 text-center select-none">
+            <div className="py-10 px-6 text-center select-none">
               {homeSettings.countdown_title && (
-                <p className="mb-8 text-lg font-medium tracking-wide text-white/60 sm:text-xl">
+                <p className="mb-8 text-xs font-semibold uppercase tracking-[0.2em] text-gray-400">
                   {homeSettings.countdown_title}
                 </p>
               )}
               {countdownPast ? (
-                <p className="text-5xl font-bold text-white">Time&apos;s up!</p>
+                <p className="text-5xl font-bold text-gray-900">Time&apos;s up!</p>
               ) : (
-                <div className="flex items-center justify-center gap-4 sm:gap-8">
+                <div className="flex items-center justify-center gap-3 sm:gap-6">
                   <FlipUnit value={cdDays}    label="Days" />
-                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <span className="mb-8 text-2xl font-light text-gray-200">:</span>
                   <FlipUnit value={cdHours}   label="Hours" />
-                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <span className="mb-8 text-2xl font-light text-gray-200">:</span>
                   <FlipUnit value={cdMinutes} label="Minutes" />
-                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <span className="mb-8 text-2xl font-light text-gray-200">:</span>
                   <FlipUnit value={cdSeconds} label="Seconds" />
                 </div>
               )}
               {canEdit && (
-                <p className="mt-8 text-[11px] text-white/20 tracking-wide">Click to edit</p>
+                <p className="mt-6 text-[10px] text-gray-300 tracking-wide">Click to edit</p>
               )}
             </div>
           )}
