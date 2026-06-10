@@ -2,228 +2,176 @@
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
-import { CalendarClock, CheckCircle2, Crown, Database, ExternalLink, Folder, Mail, Plus, RefreshCw, Shield, Trash2, UserPlus, X } from "lucide-react"
+import {
+  CalendarClock, Check, ChevronDown, ChevronRight, Crown,
+  Database, ExternalLink, Folder, Mail, Pencil, Plus,
+  RefreshCw, Shield, Trash2, UserPlus, X,
+} from "lucide-react"
 import { api } from "@/lib/api"
 import type { Contact, Document, Project, ProjectMember } from "@/lib/types"
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-interface GanttItem {
-  id: string; title: string; start: string; end: string
-  doc_id?: string; doc_ids?: string[]; mentions?: string[]; note?: string
-}
+// ── Types ──────────────────────────────────────────────────────────────────────
+interface GanttItem { id: string; title: string; start: string; end: string; doc_id?: string; doc_ids?: string[]; mentions?: string[]; note?: string }
 interface GanttTrack { id: string; name: string; color: string; items: GanttItem[] }
 interface GanttMilestone { id: string; title: string; date: string; color: string }
 interface GanttData { tracks: GanttTrack[]; milestones: GanttMilestone[] }
-interface TimelineEditor {
-  mode: "create" | "edit"
-  trackId: string
-  itemId?: string
-  title: string
-  start: string
-  end: string
-  doc_ids: string[]
-  mentions: string[]
-  note: string
-  x: number
-  y: number
-}
-interface HoveredTimelineItem {
-  item: GanttItem
-  track: GanttTrack
-  x: number
-  y: number
-}
-interface ResizeDrag {
-  trackId: string
-  itemId: string
-  edge: "start" | "end"
-  clientX: number
-  originalStart: string
-  originalEnd: string
-  currentStart: string
-  currentEnd: string
-}
-interface DocOption {
-  id: string
-  title: string
-  path: string
-  search: string
-}
-interface DocTreeNode {
-  type: "dir" | "doc"
-  name: string
-  path: string
-  doc?: DocOption
-  children?: DocTreeNode[]
-}
-interface PersonOption {
-  value: string
-  label: string
-  search: string
-}
-interface DriveRootResponse {
-  configured: boolean
-  settings_path: string
-  root_folder_id: string
-  root_folder_name: string
-  root_folder_link: string
-  source: string
-}
-interface BatchDriveSyncResponse {
-  ok: boolean
-  root: { root_folder_name: string; root_folder_link: string }
-  docs?: { synced: number; failed?: number } | null
-  meetings?: { synced: number; failed?: number } | null
-}
-interface ZoteroConfig {
-  api_key: string
-  library_id: string
-  library_type: "user" | "group"
-  api_key_set?: boolean
-}
-interface HomeSettings {
-  countdown_title: string
-  countdown_target: string
-}
+interface TimelineEditor { mode: "create" | "edit"; trackId: string; itemId?: string; title: string; start: string; end: string; doc_ids: string[]; mentions: string[]; note: string; x: number; y: number }
+interface HoveredTimelineItem { item: GanttItem; track: GanttTrack; x: number; y: number }
+interface ResizeDrag { trackId: string; itemId: string; edge: "start" | "end"; clientX: number; originalStart: string; originalEnd: string; currentStart: string; currentEnd: string }
+interface DocOption { id: string; title: string; path: string; search: string }
+interface DocTreeNode { type: "dir" | "doc"; name: string; path: string; doc?: DocOption; children?: DocTreeNode[] }
+interface PersonOption { value: string; label: string; search: string }
+interface DriveRootResponse { configured: boolean; settings_path: string; root_folder_id: string; root_folder_name: string; root_folder_link: string; source: string }
+interface BatchDriveSyncResponse { ok: boolean; root: { root_folder_name: string; root_folder_link: string }; docs?: { synced: number; failed?: number } | null; meetings?: { synced: number; failed?: number } | null }
+interface ZoteroConfig { api_key: string; library_id: string; library_type: "user" | "group"; api_key_set?: boolean }
+interface HomeSettings { countdown_title: string; countdown_target: string }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
+// ── Helpers ────────────────────────────────────────────────────────────────────
 const DAY_MS = 24 * 60 * 60 * 1000
-
 function toMs(iso: string) { return new Date(`${iso}T00:00:00`).getTime() }
-
-function formatDate(ms: number) {
-  const d = new Date(ms)
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, "0")
-  const day = String(d.getDate()).padStart(2, "0")
-  return `${y}-${m}-${day}`
-}
-
-function addDays(iso: string, days: number) {
-  return formatDate(toMs(iso) + days * DAY_MS)
-}
-
-function addMonths(date: Date, months: number) {
-  return new Date(date.getFullYear(), date.getMonth() + months, date.getDate())
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
-}
-
-function normalizeDocIds(item: GanttItem) {
-  return Array.from(new Set([...(item.doc_ids ?? []), item.doc_id ?? ""].filter(Boolean)))
-}
-
+function formatDate(ms: number) { const d = new Date(ms); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}` }
+function addDays(iso: string, days: number) { return formatDate(toMs(iso) + days * DAY_MS) }
+function addMonths(date: Date, months: number) { return new Date(date.getFullYear(), date.getMonth() + months, date.getDate()) }
+function clamp(n: number, min: number, max: number) { return Math.max(min, Math.min(max, n)) }
+function normalizeDocIds(item: GanttItem) { return Array.from(new Set([...(item.doc_ids ?? []), item.doc_id ?? ""].filter(Boolean))) }
 function monthsBetween(start: Date, end: Date) {
   const months: { label: string; year: number; month: number }[] = []
   const d = new Date(start.getFullYear(), start.getMonth(), 1)
-  while (d <= end) {
-    months.push({ label: d.toLocaleString("default", { month: "short", year: "2-digit" }), year: d.getFullYear(), month: d.getMonth() })
-    d.setMonth(d.getMonth() + 1)
-  }
+  while (d <= end) { months.push({ label: d.toLocaleString("default", { month: "short", year: "2-digit" }), year: d.getFullYear(), month: d.getMonth() }); d.setMonth(d.getMonth() + 1) }
   return months
 }
-
-function docPath(doc: Document) {
-  return doc._path || `docs/${doc.id}.md`
-}
-
-function docTitleFromPath(path: string) {
-  return path.split("/").pop()?.replace(/\.md$/, "") || path
-}
-
-function docDisplay(option: DocOption) {
-  return `${option.path.replace(/^docs\//, "")} · ${option.title}`
-}
-
+function docPath(doc: Document) { return doc._path || `document/docs/${doc.id}.md` }
+function docTitleFromPath(path: string) { return path.split("/").pop()?.replace(/\.md$/, "") || path }
+function docDisplay(option: DocOption) { return option.title }
 function buildDocOptions(docs: Document[]): DocOption[] {
-  return docs.map(doc => {
-    const path = docPath(doc)
-    const title = doc.title || docTitleFromPath(path)
-    return {
-      id: doc.id,
-      title,
-      path,
-      search: `${path} ${title}`.toLowerCase(),
-    }
-  }).sort((a, b) => a.path.localeCompare(b.path))
+  return docs.map(doc => { const path = docPath(doc); const title = doc.title || docTitleFromPath(path); return { id: doc.id, title, path, search: `${path} ${title}`.toLowerCase() } }).sort((a,b)=>a.path.localeCompare(b.path))
 }
-
 function buildDocTree(options: DocOption[]) {
-  const root: DocTreeNode = { type: "dir", name: "docs", path: "docs", children: [] }
-  for (const option of options) {
-    const rel = option.path.replace(/^docs\//, "")
+  const root: DocTreeNode = { type:"dir", name:"docs", path:"docs", children:[] }
+  for (const opt of options) {
+    const rel = opt.path.replace(/^document\/docs\//, "")
     const parts = rel.split("/")
     let node = root
-    parts.forEach((part, index) => {
-      const isLeaf = index === parts.length - 1
-      if (isLeaf) {
-        node.children!.push({ type: "doc", name: part.replace(/\.md$/, ""), path: option.path, doc: option })
-        return
-      }
-      const dirPath = `docs/${parts.slice(0, index + 1).join("/")}`
-      let child = node.children!.find(item => item.type === "dir" && item.path === dirPath)
-      if (!child) {
-        child = { type: "dir", name: part, path: dirPath, children: [] }
-        node.children!.push(child)
-      }
+    parts.forEach((part, i) => {
+      const isLeaf = i === parts.length-1
+      if (isLeaf) { node.children!.push({ type:"doc", name:part.replace(/\.md$/,""), path:opt.path, doc:opt }); return }
+      const dirPath = `docs/${parts.slice(0,i+1).join("/")}`
+      let child = node.children!.find(n => n.type==="dir" && n.path===dirPath)
+      if (!child) { child={ type:"dir", name:part, path:dirPath, children:[] }; node.children!.push(child) }
       node = child
     })
   }
-  function sortNode(node: DocTreeNode) {
-    node.children?.sort((a, b) => {
-      if (a.type !== b.type) return a.type === "dir" ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-    node.children?.forEach(sortNode)
-  }
-  sortNode(root)
-  return root.children || []
+  function sort(n: DocTreeNode) { n.children?.sort((a,b)=>a.type!==b.type?a.type==="dir"?-1:1:a.name.localeCompare(b.name)); n.children?.forEach(sort) }
+  sort(root); return root.children||[]
 }
-
 const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4"]
+const ROLE_LABELS: Record<ProjectMember["role"],string> = { admin:"Admin", member:"Can edit", viewer:"Read only" }
+function roleDescription(r: ProjectMember["role"]) { return r==="admin"?"Manage members and edit everything":r==="member"?"Edit project content":"View project content" }
 
-const ROLE_LABELS: Record<ProjectMember["role"], string> = {
-  admin: "Admin",
-  member: "Can edit",
-  viewer: "Read only",
+// ── Flip-clock digit ────────────────────────────────────────────────────────────
+function FlipUnit({ value, label }: { value: number; label: string }) {
+  const str = String(value).padStart(2, "0")
+  const [curr, setCurr] = useState(str)
+  const [prev, setPrev] = useState(str)
+  const [phase, setPhase] = useState<"idle"|"top"|"bottom">("idle")
+  const timer = useRef<ReturnType<typeof setTimeout>|null>(null)
+
+  useEffect(() => {
+    if (str === curr) return
+    if (timer.current) clearTimeout(timer.current)
+    setPrev(curr)
+    setPhase("top")
+    timer.current = setTimeout(() => {
+      setCurr(str); setPhase("bottom")
+      timer.current = setTimeout(() => setPhase("idle"), 200)
+    }, 200)
+    return () => { if (timer.current) clearTimeout(timer.current) }
+  }, [str])
+
+  const topAnim = phase === "top"  ? { animation: "rbFlipTop 200ms ease-in forwards" }  : {}
+  const botAnim = phase === "bottom" ? { animation: "rbFlipBot 200ms ease-out forwards" } : {}
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <div className="relative" style={{ perspective: "500px" }}>
+        {/* Background card */}
+        <div className="absolute inset-0 rounded-xl bg-white/5" />
+
+        {/* Top half — current top */}
+        <div className="overflow-hidden rounded-t-xl"
+          style={{ height: "3.5rem", width: "5rem", backgroundColor: "rgba(255,255,255,0.07)" }}>
+          <div className="flex h-28 w-20 items-start justify-center pt-2">
+            <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{phase==="idle"?curr:prev}</span>
+          </div>
+        </div>
+        {/* Divider */}
+        <div className="absolute inset-x-0 z-10" style={{ top:"3.5rem", height:"1px", background:"rgba(0,0,0,0.5)" }} />
+        {/* Bottom half — current bottom */}
+        <div className="overflow-hidden rounded-b-xl"
+          style={{ height: "3.5rem", width: "5rem", backgroundColor: "rgba(255,255,255,0.04)" }}>
+          <div className="flex h-28 w-20 items-end justify-center pb-2">
+            <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{curr}</span>
+          </div>
+        </div>
+
+        {/* Flipping card (animated) */}
+        {phase !== "idle" && (
+          <div
+            className="absolute inset-x-0 z-20 overflow-hidden rounded-xl"
+            style={{ top: 0, height: "7rem", transformOrigin: "center center", ...( phase==="top" ? topAnim : botAnim ), backgroundColor: "rgba(255,255,255,0.07)" }}
+          >
+            <div className="flex h-28 w-20 items-center justify-center">
+              <span className="font-mono text-5xl font-bold leading-none text-white sm:text-6xl">{phase==="top"?prev:curr}</span>
+            </div>
+          </div>
+        )}
+      </div>
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-white/40">{label}</span>
+    </div>
+  )
 }
 
-function roleDescription(role: ProjectMember["role"]) {
-  if (role === "admin") return "Manage members and edit everything"
-  if (role === "member") return "Edit project content"
-  return "View project content"
-}
-
-// ── Main component ────────────────────────────────────────────────────────────
-
+// ── Main ────────────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const { id: projectId } = useParams<{ id: string }>()
+
+  // Core data
   const [gantt, setGantt] = useState<GanttData>({ tracks: [], milestones: [] })
   const [project, setProject] = useState<Project | null>(null)
   const [contacts, setContacts] = useState<Contact[]>([])
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [docs, setDocs] = useState<Document[]>([])
   const [loading, setLoading] = useState(true)
-  const [projectName, setProjectName] = useState("")
-  const [projectSettingsMsg, setProjectSettingsMsg] = useState("")
-  const [projectSettingsError, setProjectSettingsError] = useState("")
+
+  // Project name editing
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState("")
+  const [nameBusy, setNameBusy] = useState(false)
+
+  // Countdown editing
+  const [homeSettings, setHomeSettings] = useState<HomeSettings>({ countdown_title: "", countdown_target: "" })
+  const [editingCountdown, setEditingCountdown] = useState(false)
+  const [countdownForm, setCountdownForm] = useState<HomeSettings>({ countdown_title: "", countdown_target: "" })
+  const [countdownBusy, setCountdownBusy] = useState(false)
+  const [nowTick, setNowTick] = useState(() => Date.now())
+
+  // Project settings (collapsible)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsMsg, setSettingsMsg] = useState("")
+  const [settingsError, setSettingsError] = useState("")
   const [driveConnected, setDriveConnected] = useState<boolean | null>(null)
   const [driveRoot, setDriveRoot] = useState<DriveRootResponse | null>(null)
-  const [driveMode, setDriveMode] = useState<"default" | "existing" | "new">("default")
+  const [driveMode, setDriveMode] = useState<"default"|"existing"|"new">("default")
   const [folderUrl, setFolderUrl] = useState("")
   const [folderName, setFolderName] = useState("")
   const [parentFolderUrl, setParentFolderUrl] = useState("")
-  const [syncScope, setSyncScope] = useState<"all" | "docs" | "meetings">("all")
-  const [syncMode, setSyncMode] = useState<"mapped" | "new">("mapped")
+  const [syncScope, setSyncScope] = useState<"all"|"docs"|"meetings">("all")
+  const [syncMode, setSyncMode] = useState<"mapped"|"new">("mapped")
   const [syncResult, setSyncResult] = useState<BatchDriveSyncResponse | null>(null)
   const [zoteroConfig, setZoteroConfig] = useState<ZoteroConfig>({ api_key: "", library_id: "", library_type: "user" })
-  const [homeSettings, setHomeSettings] = useState<HomeSettings>({ countdown_title: "", countdown_target: "" })
-  const [nowTick, setNowTick] = useState(() => Date.now())
-  const [settingsBusy, setSettingsBusy] = useState<"" | "project" | "drive" | "sync" | "zotero" | "home">("")
+  const [settingsBusy, setSettingsBusy] = useState<""|"drive"|"sync"|"zotero">("")
+
+  // Timeline state
   const [addTrack, setAddTrack] = useState(false)
   const [trackName, setTrackName] = useState("")
   const [trackColor, setTrackColor] = useState(TRACK_COLORS[0])
@@ -234,13 +182,17 @@ export default function HomePage() {
   const [docQuery, setDocQuery] = useState("")
   const [personQuery, setPersonQuery] = useState("")
   const [expandedDocDirs, setExpandedDocDirs] = useState<Set<string>>(new Set(["docs"]))
+
+  // Team state
   const [addingMember, setAddingMember] = useState(false)
   const [memberForm, setMemberForm] = useState<{ email: string; role: ProjectMember["role"] }>({ email: "", role: "member" })
   const [teamMsg, setTeamMsg] = useState("")
+
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<ResizeDrag | null>(null)
   const initializedTimelineRef = useRef(false)
 
+  // ── Load ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
     initializedTimelineRef.current = false
     Promise.all([
@@ -254,1120 +206,628 @@ export default function HomePage() {
       api.get<ZoteroConfig>(`/api/projects/${projectId}/zotero`).catch(() => null),
       api.get<HomeSettings>(`/api/projects/${projectId}/home-settings`).catch(() => ({ countdown_title: "", countdown_target: "" })),
     ]).then(([p, g, c, m, d, drive, root, zotero, home]) => {
-      setProject(p)
-      setProjectName(p.name)
-      setGantt(g)
-      setContacts(c)
-      setMembers(m)
-      setDocs(d)
-      setDriveConnected(drive.connected)
-      setDriveRoot(root)
+      setProject(p); setNameInput(p.name); setGantt(g); setContacts(c); setMembers(m); setDocs(d)
+      setDriveConnected(drive.connected); setDriveRoot(root)
       if (root?.root_folder_name) setFolderName(root.root_folder_name)
       if (zotero) setZoteroConfig({ api_key: "", library_id: zotero.library_id || "", library_type: zotero.library_type || "user", api_key_set: zotero.api_key_set })
-      setHomeSettings(home)
+      setHomeSettings(home); setCountdownForm(home)
     }).finally(() => setLoading(false))
   }, [projectId])
 
+  // Tick every second for countdown
   useEffect(() => {
     const id = window.setInterval(() => setNowTick(Date.now()), 1000)
     return () => window.clearInterval(id)
   }, [])
 
-  function showProjectSettingsMessage(text: string) {
-    setProjectSettingsError("")
-    setProjectSettingsMsg(text)
-  }
+  // ── Derived countdown values ───────────────────────────────────────────────────
+  const countdownMs = homeSettings.countdown_target ? new Date(homeSettings.countdown_target).getTime() - nowTick : 0
+  const countdownPast = !!homeSettings.countdown_target && countdownMs <= 0
+  const cdDays    = Math.max(0, Math.floor(countdownMs / DAY_MS))
+  const cdHours   = Math.max(0, Math.floor((countdownMs % DAY_MS) / 3_600_000))
+  const cdMinutes = Math.max(0, Math.floor((countdownMs % 3_600_000) / 60_000))
+  const cdSeconds = Math.max(0, Math.floor((countdownMs % 60_000) / 1000))
 
-  function showProjectSettingsError(err: unknown, fallback: string) {
-    setProjectSettingsMsg("")
-    setProjectSettingsError(err instanceof Error ? err.message : fallback)
-  }
+  // ── Permissions ────────────────────────────────────────────────────────────────
+  const isAdmin   = project?.role === "admin"
+  const canEdit   = isAdmin || project?.role === "member"
 
-  async function saveProjectName(e: React.FormEvent) {
-    e.preventDefault()
-    setSettingsBusy("project")
+  // ── Project name ──────────────────────────────────────────────────────────────
+  async function saveName(e: React.FormEvent) {
+    e.preventDefault(); setNameBusy(true)
     try {
-      const updated = await api.patch<Project>(`/api/projects/${projectId}`, { name: projectName })
-      setProject(updated)
-      setProjectName(updated.name)
-      showProjectSettingsMessage("Project name updated.")
-    } catch (err) {
-      showProjectSettingsError(err, "Could not update project")
-    } finally {
-      setSettingsBusy("")
-    }
+      const updated = await api.patch<Project>(`/api/projects/${projectId}`, { name: nameInput })
+      setProject(updated); setNameInput(updated.name); setEditingName(false)
+    } finally { setNameBusy(false) }
   }
 
-  async function saveHomeSettings(e: React.FormEvent) {
-    e.preventDefault()
-    setSettingsBusy("home")
+  // ── Countdown ─────────────────────────────────────────────────────────────────
+  async function saveCountdown(e: React.FormEvent) {
+    e.preventDefault(); setCountdownBusy(true)
     try {
-      const saved = await api.put<HomeSettings>(`/api/projects/${projectId}/home-settings`, homeSettings)
-      setHomeSettings(saved)
-      showProjectSettingsMessage("Countdown saved.")
-    } catch (err) {
-      showProjectSettingsError(err, "Could not save countdown")
-    } finally {
-      setSettingsBusy("")
-    }
+      const saved = await api.put<HomeSettings>(`/api/projects/${projectId}/home-settings`, countdownForm)
+      setHomeSettings(saved); setCountdownForm(saved); setEditingCountdown(false)
+    } finally { setCountdownBusy(false) }
   }
+
+  // ── Project integrations ──────────────────────────────────────────────────────
+  function showMsg(text: string) { setSettingsError(""); setSettingsMsg(text) }
+  function showErr(err: unknown, fb: string) { setSettingsMsg(""); setSettingsError(err instanceof Error ? err.message : fb) }
 
   async function saveDriveRoot() {
     setSettingsBusy("drive")
     try {
-      const root = await api.put<DriveRootResponse>(`/api/projects/${projectId}/drive-root`, {
-        mode: driveMode,
-        folder_url: folderUrl,
-        folder_name: folderName,
-        parent_folder_url: parentFolderUrl,
-      })
-      setDriveRoot({
-        configured: !!root.root_folder_id,
-        settings_path: root.settings_path || ".researchbuddy/drive-settings.json",
-        root_folder_id: root.root_folder_id,
-        root_folder_name: root.root_folder_name,
-        root_folder_link: root.root_folder_link,
-        source: root.source,
-      })
-      setFolderUrl("")
-      setParentFolderUrl("")
-      setSyncResult(null)
-      showProjectSettingsMessage("Google Drive folder saved.")
-    } catch (err) {
-      showProjectSettingsError(err, "Could not save Google Drive folder")
-    } finally {
-      setSettingsBusy("")
-    }
+      const root = await api.put<DriveRootResponse>(`/api/projects/${projectId}/drive-root`, { mode: driveMode, folder_url: folderUrl, folder_name: folderName, parent_folder_url: parentFolderUrl })
+      setDriveRoot({ ...root, configured: !!root.root_folder_id }); setFolderUrl(""); setParentFolderUrl(""); setSyncResult(null)
+      showMsg("Google Drive folder saved.")
+    } catch (err) { showErr(err, "Could not save Drive folder") } finally { setSettingsBusy("") }
   }
 
   async function syncProjectDrive() {
     setSettingsBusy("sync")
     try {
-      const result = await api.post<BatchDriveSyncResponse>(`/api/projects/${projectId}/drive/sync`, {
-        scope: syncScope,
-        mode: syncMode,
-      })
-      setSyncResult(result)
-      showProjectSettingsMessage("Google Drive sync finished.")
-    } catch (err) {
-      showProjectSettingsError(err, "Google Drive sync failed")
-    } finally {
-      setSettingsBusy("")
-    }
+      const result = await api.post<BatchDriveSyncResponse>(`/api/projects/${projectId}/drive/sync`, { scope: syncScope, mode: syncMode })
+      setSyncResult(result); showMsg("Sync finished.")
+    } catch (err) { showErr(err, "Sync failed") } finally { setSettingsBusy("") }
   }
 
   async function saveZotero(e: React.FormEvent) {
-    e.preventDefault()
-    setSettingsBusy("zotero")
+    e.preventDefault(); setSettingsBusy("zotero")
     try {
-      await api.put(`/api/projects/${projectId}/zotero`, {
-        api_key: zoteroConfig.api_key || undefined,
-        library_id: zoteroConfig.library_id,
-        library_type: zoteroConfig.library_type,
-      })
-      setZoteroConfig(config => ({ ...config, api_key: "", api_key_set: true }))
-      showProjectSettingsMessage("Zotero settings saved.")
-    } catch (err) {
-      showProjectSettingsError(err, "Could not save Zotero settings")
-    } finally {
-      setSettingsBusy("")
-    }
+      await api.put(`/api/projects/${projectId}/zotero`, { api_key: zoteroConfig.api_key || undefined, library_id: zoteroConfig.library_id, library_type: zoteroConfig.library_type })
+      setZoteroConfig(c => ({ ...c, api_key: "", api_key_set: true })); showMsg("Zotero settings saved.")
+    } catch (err) { showErr(err, "Could not save Zotero") } finally { setSettingsBusy("") }
   }
 
-  // Compute time range
-  const allDates = [
-    ...gantt.tracks.flatMap(t => t.items.flatMap(i => [i.start, i.end])),
-    ...gantt.milestones.map(m => m.date),
-  ].filter(Boolean)
+  // ── Timeline helpers ──────────────────────────────────────────────────────────
+  const allDates = [...gantt.tracks.flatMap(t => t.items.flatMap(i => [i.start, i.end])), ...gantt.milestones.map(m => m.date)].filter(Boolean)
   const now = new Date()
   const projectStart = project?.created_at ? new Date(project.created_at) : now
   const baseStart = new Date(projectStart.getFullYear() - 1, projectStart.getMonth(), 1)
-  const baseEnd = new Date(projectStart.getFullYear() + 1, projectStart.getMonth() + 1, 1)
-  const itemMin = allDates.length ? new Date(Math.min(...allDates.map(toMs))) : baseStart
-  const itemMax = allDates.length ? new Date(Math.max(...allDates.map(toMs))) : baseEnd
+  const baseEnd   = new Date(projectStart.getFullYear() + 1, projectStart.getMonth() + 1, 1)
+  const itemMin   = allDates.length ? new Date(Math.min(...allDates.map(toMs))) : baseStart
+  const itemMax   = allDates.length ? new Date(Math.max(...allDates.map(toMs))) : baseEnd
   const viewStart = new Date(Math.min(baseStart.getTime(), addMonths(itemMin, -1).getTime()))
-  const viewEnd = new Date(Math.max(baseEnd.getTime(), addMonths(itemMax, 1).getTime()))
-  const totalMs = viewEnd.getTime() - viewStart.getTime()
-  const months = monthsBetween(viewStart, viewEnd)
+  const viewEnd   = new Date(Math.max(baseEnd.getTime(), addMonths(itemMax, 1).getTime()))
+  const totalMs   = viewEnd.getTime() - viewStart.getTime()
+  const months    = monthsBetween(viewStart, viewEnd)
   const totalWidth = months.length * monthWidth
-
-  function xForDate(iso: string) {
-    return ((toMs(iso) - viewStart.getTime()) / totalMs) * totalWidth
-  }
-
-  function dateForX(x: number) {
-    const ratio = clamp(x / Math.max(1, totalWidth), 0, 1)
-    return formatDate(viewStart.getTime() + ratio * totalMs)
-  }
+  function xForDate(iso: string) { return ((toMs(iso) - viewStart.getTime()) / totalMs) * totalWidth }
+  function dateForX(x: number) { return formatDate(viewStart.getTime() + clamp(x/Math.max(1,totalWidth),0,1)*totalMs) }
 
   useEffect(() => {
     if (loading || initializedTimelineRef.current || !scrollRef.current || months.length === 0) return
     const viewport = scrollRef.current
     const targetMonthWidth = clamp(viewport.clientWidth / 6, 82, 220)
     const nextTotalWidth = months.length * targetMonthWidth
-    const recentStart = addMonths(now, -5)
-    const targetDate = new Date(clamp(recentStart.getTime(), viewStart.getTime(), viewEnd.getTime()))
+    const targetDate = new Date(clamp(addMonths(now,-5).getTime(), viewStart.getTime(), viewEnd.getTime()))
     const targetX = ((targetDate.getTime() - viewStart.getTime()) / Math.max(1, totalMs)) * nextTotalWidth
-    initializedTimelineRef.current = true
-    setMonthWidth(targetMonthWidth)
-    window.requestAnimationFrame(() => {
-      viewport.scrollLeft = clamp(targetX, 0, Math.max(0, nextTotalWidth - viewport.clientWidth))
-    })
-  }, [loading, months.length, projectId, totalMs, viewEnd, viewStart])
+    initializedTimelineRef.current = true; setMonthWidth(targetMonthWidth)
+    window.requestAnimationFrame(() => { viewport.scrollLeft = clamp(targetX, 0, Math.max(0, nextTotalWidth - viewport.clientWidth)) })
+  }, [loading, months.length, projectId])
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
-      const drag = dragRef.current
-      if (!drag) return
+      const drag = dragRef.current; if (!drag) return
       const dayWidth = Math.max(1, totalWidth / Math.max(1, Math.round(totalMs / DAY_MS)))
       const deltaDays = Math.round((e.clientX - drag.clientX) / dayWidth)
-      let start = drag.originalStart
-      let end = drag.originalEnd
-      if (drag.edge === "start") {
-        start = addDays(drag.originalStart, deltaDays)
-        if (toMs(start) > toMs(end) - DAY_MS) start = addDays(end, -1)
-      } else {
-        end = addDays(drag.originalEnd, deltaDays)
-        if (toMs(end) < toMs(start) + DAY_MS) end = addDays(start, 1)
-      }
-      drag.currentStart = start
-      drag.currentEnd = end
-      if (drag.itemId === "__draft__") {
-        setTimelineEditor(editor => editor ? { ...editor, start, end } : editor)
-        return
-      }
-      setGantt(g => ({
-        ...g,
-        tracks: g.tracks.map(t => t.id === drag.trackId ? {
-          ...t,
-          items: t.items.map(i => i.id === drag.itemId ? { ...i, start, end } : i),
-        } : t)
-      }))
+      let start = drag.originalStart, end = drag.originalEnd
+      if (drag.edge === "start") { start = addDays(drag.originalStart, deltaDays); if (toMs(start) > toMs(end) - DAY_MS) start = addDays(end, -1) }
+      else { end = addDays(drag.originalEnd, deltaDays); if (toMs(end) < toMs(start) + DAY_MS) end = addDays(start, 1) }
+      drag.currentStart = start; drag.currentEnd = end
+      if (drag.itemId === "__draft__") { setTimelineEditor(ed => ed ? { ...ed, start, end } : ed); return }
+      setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===drag.trackId ? { ...t, items: t.items.map(i => i.id===drag.itemId ? { ...i, start, end } : i) } : t) }))
     }
-
     async function onUp() {
-      const drag = dragRef.current
-      if (!drag) return
-      dragRef.current = null
-      setDraggingItem(null)
-      if (drag.itemId === "__draft__") return
-      if (drag.currentStart === drag.originalStart && drag.currentEnd === drag.originalEnd) return
-      try {
-        await api.patch<GanttItem>(`/api/projects/${projectId}/gantt/tracks/${drag.trackId}/items/${drag.itemId}`, {
-          start: drag.currentStart,
-          end: drag.currentEnd,
-        })
-      } catch {
-        setGantt(g => ({
-          ...g,
-          tracks: g.tracks.map(t => t.id === drag.trackId ? {
-            ...t,
-            items: t.items.map(i => i.id === drag.itemId ? { ...i, start: drag.originalStart, end: drag.originalEnd } : i),
-          } : t)
-        }))
-      }
+      const drag = dragRef.current; if (!drag) return
+      dragRef.current = null; setDraggingItem(null)
+      if (drag.itemId === "__draft__" || (drag.currentStart===drag.originalStart && drag.currentEnd===drag.originalEnd)) return
+      try { await api.patch(`/api/projects/${projectId}/gantt/tracks/${drag.trackId}/items/${drag.itemId}`, { start: drag.currentStart, end: drag.currentEnd }) }
+      catch { setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===drag.trackId ? { ...t, items: t.items.map(i => i.id===drag.itemId ? { ...i, start:drag.originalStart, end:drag.originalEnd } : i) } : t) })) }
     }
-
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
-    return () => {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
-    }
+    window.addEventListener("mousemove", onMove); window.addEventListener("mouseup", onUp)
+    return () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp) }
   }, [projectId, totalMs, totalWidth])
 
   async function createTrack(e: React.FormEvent) {
     e.preventDefault()
-    const track = await api.post<GanttTrack>(`/api/projects/${projectId}/gantt/tracks`, {
-      name: trackName, color: trackColor, items: []
-    })
-    setGantt(g => ({ ...g, tracks: [...g.tracks, track] }))
-    setTrackName(""); setAddTrack(false)
+    const track = await api.post<GanttTrack>(`/api/projects/${projectId}/gantt/tracks`, { name: trackName, color: trackColor, items: [] })
+    setGantt(g => ({ ...g, tracks: [...g.tracks, track] })); setTrackName(""); setAddTrack(false)
   }
-
   async function deleteTrack(trackId: string) {
     if (!confirm("Delete this track and all its items?")) return
     await api.delete(`/api/projects/${projectId}/gantt/tracks/${trackId}`)
     setGantt(g => ({ ...g, tracks: g.tracks.filter(t => t.id !== trackId) }))
   }
-
-  function openCreateItem(trackId: string, date: string, x: number, y: number) {
-    setHoveredItem(null)
-    setDocQuery("")
-    setPersonQuery("")
-    setTimelineEditor({
-      mode: "create",
-      trackId,
-      title: "",
-      start: date,
-      end: addDays(date, 7),
-      doc_ids: [],
-      mentions: [],
-      note: "",
-      x,
-      y,
-    })
-  }
-
-  function openEditItem(track: GanttTrack, item: GanttItem, x: number, y: number) {
-    setHoveredItem(null)
-    setDocQuery("")
-    setPersonQuery("")
-    setTimelineEditor({
-      mode: "edit",
-      trackId: track.id,
-      itemId: item.id,
-      title: item.title,
-      start: item.start,
-      end: item.end,
-      doc_ids: normalizeDocIds(item),
-      mentions: item.mentions ?? [],
-      note: item.note ?? "",
-      x,
-      y,
-    })
-  }
-
-  function addEditorDoc(docId: string) {
-    setTimelineEditor(editor => {
-      if (!editor || editor.doc_ids.includes(docId)) return editor
-      return { ...editor, doc_ids: [...editor.doc_ids, docId] }
-    })
-    setDocQuery("")
-  }
-
-  function removeEditorDoc(docId: string) {
-    setTimelineEditor(editor => editor ? { ...editor, doc_ids: editor.doc_ids.filter(id => id !== docId) } : editor)
-  }
-
-  function addEditorPerson(value: string) {
-    setTimelineEditor(editor => {
-      if (!editor || editor.mentions.includes(value)) return editor
-      return { ...editor, mentions: [...editor.mentions, value] }
-    })
-    setPersonQuery("")
-  }
-
-  function removeEditorPerson(value: string) {
-    setTimelineEditor(editor => editor ? { ...editor, mentions: editor.mentions.filter(item => item !== value) } : editor)
-  }
-
-  function addFirstMatchingDoc() {
-    const query = docQuery.trim().toLowerCase()
-    if (!query) return
-    const match = docOptions.find(doc => doc.search.includes(query))
-    if (match) addEditorDoc(match.id)
-  }
-
-  function addFirstMatchingPerson() {
-    const query = personQuery.trim().toLowerCase()
-    if (!query) return
-    const match = peopleOptions.find(person => person.search.includes(query))
-    if (match) addEditorPerson(match.value)
-  }
+  function openCreateItem(trackId: string, date: string, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setPersonQuery(""); setTimelineEditor({ mode:"create", trackId, title:"", start:date, end:addDays(date,7), doc_ids:[], mentions:[], note:"", x, y }) }
+  function openEditItem(track: GanttTrack, item: GanttItem, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setPersonQuery(""); setTimelineEditor({ mode:"edit", trackId:track.id, itemId:item.id, title:item.title, start:item.start, end:item.end, doc_ids:normalizeDocIds(item), mentions:item.mentions??[], note:item.note??"", x, y }) }
+  function addEditorDoc(docId: string) { setTimelineEditor(ed => ed && !ed.doc_ids.includes(docId) ? { ...ed, doc_ids:[...ed.doc_ids, docId] } : ed); setDocQuery("") }
+  function removeEditorDoc(docId: string) { setTimelineEditor(ed => ed ? { ...ed, doc_ids: ed.doc_ids.filter(id => id!==docId) } : ed) }
+  function addEditorPerson(value: string) { setTimelineEditor(ed => ed && !ed.mentions.includes(value) ? { ...ed, mentions:[...ed.mentions, value] } : ed); setPersonQuery("") }
+  function removeEditorPerson(value: string) { setTimelineEditor(ed => ed ? { ...ed, mentions: ed.mentions.filter(m => m!==value) } : ed) }
+  const docOptions = buildDocOptions(docs)
+  const docTree = buildDocTree(docOptions)
+  const docById = new Map(docOptions.map(d => [d.id, d]))
+  const addFirstMatchingDoc = () => { const q=docQuery.trim().toLowerCase(); if(!q) return; const m=docOptions.find(d=>d.search.includes(q)); if(m) addEditorDoc(m.id) }
+  const addFirstMatchingPerson = () => { const q=personQuery.trim().toLowerCase(); if(!q) return; const m=peopleOptions.find(p=>p.search.includes(q)); if(m) addEditorPerson(m.value) }
 
   async function saveTimelineItem(e: React.FormEvent) {
-    e.preventDefault()
-    if (!timelineEditor) return
-    const start = timelineEditor.start <= timelineEditor.end ? timelineEditor.start : timelineEditor.end
-    const end = timelineEditor.end >= timelineEditor.start ? timelineEditor.end : timelineEditor.start
-    const payload = {
-      title: timelineEditor.title.trim() || "Untitled",
-      start,
-      end,
-      doc_id: timelineEditor.doc_ids[0] ?? "",
-      doc_ids: timelineEditor.doc_ids,
-      mentions: timelineEditor.mentions.map(s => s.trim().replace(/^@/, "")).filter(Boolean),
-      note: timelineEditor.note,
-    }
-
-    if (timelineEditor.mode === "edit" && timelineEditor.itemId) {
+    e.preventDefault(); if (!timelineEditor) return
+    const start = timelineEditor.start<=timelineEditor.end ? timelineEditor.start : timelineEditor.end
+    const end   = timelineEditor.end  >=timelineEditor.start ? timelineEditor.end   : timelineEditor.start
+    const payload = { title: timelineEditor.title.trim()||"Untitled", start, end, doc_id: timelineEditor.doc_ids[0]??"", doc_ids: timelineEditor.doc_ids, mentions: timelineEditor.mentions.map(s=>s.trim().replace(/^@/,"")).filter(Boolean), note: timelineEditor.note }
+    if (timelineEditor.mode==="edit" && timelineEditor.itemId) {
       const updated = await api.patch<GanttItem>(`/api/projects/${projectId}/gantt/tracks/${timelineEditor.trackId}/items/${timelineEditor.itemId}`, payload)
-      setGantt(g => ({
-        ...g,
-        tracks: g.tracks.map(t => t.id === timelineEditor.trackId ? {
-          ...t,
-          items: t.items.map(i => i.id === timelineEditor.itemId ? updated : i),
-        } : t)
-      }))
+      setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===timelineEditor.trackId ? { ...t, items: t.items.map(i => i.id===timelineEditor.itemId ? updated : i) } : t) }))
     } else {
       const item = await api.post<GanttItem>(`/api/projects/${projectId}/gantt/tracks/${timelineEditor.trackId}/items`, payload)
-      setGantt(g => ({
-        ...g,
-        tracks: g.tracks.map(t => t.id === timelineEditor.trackId ? { ...t, items: [...t.items, item] } : t)
-      }))
+      setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===timelineEditor.trackId ? { ...t, items:[...t.items, item] } : t) }))
     }
     setTimelineEditor(null)
   }
-
   async function deleteItem(trackId: string, itemId: string) {
     await api.delete(`/api/projects/${projectId}/gantt/tracks/${trackId}/items/${itemId}`)
-    setGantt(g => ({
-      ...g,
-      tracks: g.tracks.map(t => t.id === trackId ? { ...t, items: t.items.filter(i => i.id !== itemId) } : t)
-    }))
-    if (timelineEditor?.itemId === itemId) setTimelineEditor(null)
+    setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===trackId ? { ...t, items: t.items.filter(i=>i.id!==itemId) } : t) }))
+    if (timelineEditor?.itemId===itemId) setTimelineEditor(null)
   }
-
   function handleTimelineWheel(e: React.WheelEvent<HTMLDivElement>) {
-    if (!scrollRef.current) return
-    e.preventDefault()
-    const viewport = scrollRef.current
-    const rect = viewport.getBoundingClientRect()
-    const pointerX = e.clientX - rect.left + viewport.scrollLeft
-    const ratio = pointerX / Math.max(1, totalWidth)
-    const next = clamp(monthWidth * (e.deltaY > 0 ? 0.88 : 1.12), 58, 260)
-    const nextTotal = months.length * next
-    setMonthWidth(next)
-    window.requestAnimationFrame(() => {
-      viewport.scrollLeft = clamp(ratio * nextTotal - (e.clientX - rect.left), 0, Math.max(0, nextTotal - rect.width))
-    })
+    if (!scrollRef.current) return; e.preventDefault()
+    const vp = scrollRef.current; const rect = vp.getBoundingClientRect()
+    const px = e.clientX-rect.left+vp.scrollLeft; const ratio = px/Math.max(1,totalWidth)
+    const next = clamp(monthWidth*(e.deltaY>0?0.88:1.12),58,260); const nextTotal = months.length*next
+    setMonthWidth(next); window.requestAnimationFrame(() => { vp.scrollLeft = clamp(ratio*nextTotal-(e.clientX-rect.left),0,Math.max(0,nextTotal-rect.width)) })
   }
-
-  function startResize(e: React.MouseEvent, trackId: string, item: GanttItem, edge: "start" | "end") {
-    e.preventDefault()
-    e.stopPropagation()
-    dragRef.current = {
-      trackId,
-      itemId: item.id,
-      edge,
-      clientX: e.clientX,
-      originalStart: item.start,
-      originalEnd: item.end,
-      currentStart: item.start,
-      currentEnd: item.end,
-    }
+  function startResize(e: React.MouseEvent, trackId: string, item: GanttItem, edge: "start"|"end") {
+    e.preventDefault(); e.stopPropagation()
+    dragRef.current = { trackId, itemId:item.id, edge, clientX:e.clientX, originalStart:item.start, originalEnd:item.end, currentStart:item.start, currentEnd:item.end }
     setDraggingItem(item.id)
   }
-
-  function startDraftResize(e: React.MouseEvent, edge: "start" | "end") {
-    if (!timelineEditor) return
-    e.preventDefault()
-    e.stopPropagation()
-    dragRef.current = {
-      trackId: timelineEditor.trackId,
-      itemId: "__draft__",
-      edge,
-      clientX: e.clientX,
-      originalStart: timelineEditor.start,
-      originalEnd: timelineEditor.end,
-      currentStart: timelineEditor.start,
-      currentEnd: timelineEditor.end,
-    }
+  function startDraftResize(e: React.MouseEvent, edge: "start"|"end") {
+    if (!timelineEditor) return; e.preventDefault(); e.stopPropagation()
+    dragRef.current = { trackId:timelineEditor.trackId, itemId:"__draft__", edge, clientX:e.clientX, originalStart:timelineEditor.start, originalEnd:timelineEditor.end, currentStart:timelineEditor.start, currentEnd:timelineEditor.end }
     setDraggingItem("__draft__")
   }
 
+  // ── Team ──────────────────────────────────────────────────────────────────────
+  const peopleOptions: PersonOption[] = []; const personLookupEntries: [string,PersonOption][] = []; const seenPeopleKeys = new Set<string>()
+  function pushPerson(value: string, label: string, search: string, aliases: string[]) {
+    const keys = Array.from(new Set([value,label,...aliases].map(x=>x.trim().toLowerCase()).filter(Boolean)))
+    if (!value.trim() || keys.some(k=>seenPeopleKeys.has(k))) { const ex=keys.map(k=>personLookupEntries.find(([a])=>a===k)?.[1]).find(Boolean); if(ex) keys.forEach(k=>personLookupEntries.push([k,ex])); return }
+    const opt={value,label,search:search.toLowerCase()}; keys.forEach(k=>{seenPeopleKeys.add(k);personLookupEntries.push([k,opt])}); peopleOptions.push(opt)
+  }
+  contacts.forEach(c=>pushPerson(c.handle, c.name||c.handle, `${c.name} ${c.handle} ${c.email}`, [c.email,c.handle,c.name]))
+  members.filter(m=>m.status==="active").forEach(m=>{ const lbl=m.name||m.email.split("@",1)[0]; pushPerson(m.email,lbl,`${m.name} ${m.email}`,[m.email,lbl]) })
+  const personByValue = new Map(personLookupEntries)
+  function personLabel(v: string) { const p=personByValue.get(v)||personByValue.get(v.trim().toLowerCase()); return p?.label||v.replace(/^@/,"").split("@",1)[0] }
+
   async function inviteMember(e: React.FormEvent) {
-    e.preventDefault()
-    setTeamMsg("")
+    e.preventDefault(); setTeamMsg("")
     try {
       const member = await api.post<ProjectMember>(`/api/projects/${projectId}/members`, memberForm)
-      setMembers(prev => [...prev.filter(item => item.id !== member.id && item.email !== member.email), member])
-      setMemberForm({ email: "", role: "member" })
-      setAddingMember(false)
-      setTeamMsg(member.status === "pending" ? "Invitation saved. The user will get access automatically after registering." : "Member added.")
-      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
-    } catch (err: any) {
-      setTeamMsg(err.message || "Could not invite member")
-    }
+      setMembers(prev => [...prev.filter(m=>m.id!==member.id&&m.email!==member.email), member])
+      setMemberForm({ email:"", role:"member" }); setAddingMember(false)
+      setTeamMsg(member.status==="pending"?"Invitation saved. The user will get access automatically after registering.":"Member added.")
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(()=>{})
+    } catch (err: unknown) { setTeamMsg(err instanceof Error ? err.message : "Could not invite member") }
   }
-
   async function updateMemberRole(member: ProjectMember, role: ProjectMember["role"]) {
     setTeamMsg("")
     try {
-      const updated = member.status === "pending" && member.invite_id
-        ? await api.put<ProjectMember>(`/api/projects/${projectId}/invites/${member.invite_id}/role`, { role })
-        : await api.put<ProjectMember>(`/api/projects/${projectId}/members/${member.user_id}/role`, { role })
-      setMembers(prev => prev.map(item => item.id === member.id ? updated : item))
-      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
-    } catch (err: any) {
-      setTeamMsg(err.message || "Could not update member")
-    }
+      const updated = member.status==="pending"&&member.invite_id
+        ? await api.put<ProjectMember>(`/api/projects/${projectId}/invites/${member.invite_id}/role`,{role})
+        : await api.put<ProjectMember>(`/api/projects/${projectId}/members/${member.user_id}/role`,{role})
+      setMembers(prev=>prev.map(m=>m.id===member.id?updated:m))
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(()=>{})
+    } catch (err: unknown) { setTeamMsg(err instanceof Error ? err.message : "Could not update member") }
   }
-
   async function removeProjectMember(member: ProjectMember) {
-    const label = member.status === "pending" ? "Cancel this invitation?" : `Remove ${member.email} from this project?`
-    if (!confirm(label)) return
+    if (!confirm(member.status==="pending"?"Cancel this invitation?":`Remove ${member.email}?`)) return
     setTeamMsg("")
     try {
-      if (member.status === "pending" && member.invite_id) {
-        await api.delete(`/api/projects/${projectId}/invites/${member.invite_id}`)
-      } else {
-        await api.delete(`/api/projects/${projectId}/members/${member.user_id}`)
-      }
-      setMembers(prev => prev.filter(item => item.id !== member.id))
-      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(() => {})
-    } catch (err: any) {
-      setTeamMsg(err.message || "Could not remove member")
-    }
+      if (member.status==="pending"&&member.invite_id) await api.delete(`/api/projects/${projectId}/invites/${member.invite_id}`)
+      else await api.delete(`/api/projects/${projectId}/members/${member.user_id}`)
+      setMembers(prev=>prev.filter(m=>m.id!==member.id))
+      api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(()=>{})
+    } catch (err: unknown) { setTeamMsg(err instanceof Error ? err.message : "Could not remove member") }
+  }
+
+  // ── Floating editor helpers ────────────────────────────────────────────────────
+  function floatingStyle(x: number, y: number, w: number, h: number): CSSProperties {
+    if (typeof window==="undefined") return { left:x+12, top:y+12 }
+    return { left: clamp(x+12,12,window.innerWidth-w-12), top: clamp(y+12,12,window.innerHeight-h-12) }
+  }
+  function toggleDocDir(path: string) { setExpandedDocDirs(prev=>{ const n=new Set(prev); n.has(path)?n.delete(path):n.add(path); return n }) }
+  function renderDocNode(node: DocTreeNode, depth=0): ReactNode {
+    if (node.type==="dir") { const open=expandedDocDirs.has(node.path); return (
+      <div key={node.path}><button type="button" onClick={()=>toggleDocDir(node.path)} className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs text-gray-600 hover:bg-gray-50" style={{paddingLeft:6+depth*14}}><span className="w-3 text-gray-400">{open?"−":"+"}</span><span className="truncate">{node.name}</span></button>{open&&node.children?.map(c=>renderDocNode(c,depth+1))}</div>
+    ) }
+    const sel=!!timelineEditor?.doc_ids.includes(node.doc!.id)
+    return <button key={node.path} type="button" onClick={()=>addEditorDoc(node.doc!.id)} disabled={sel} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45" style={{paddingLeft:6+depth*14}}><span className="min-w-0 truncate text-gray-700">{node.name}</span><span className="shrink-0 text-[10px] text-gray-400">{sel?"Added":"Add"}</span></button>
   }
 
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
 
-  const canManageTeam = project?.role === "admin"
-  const canEditTimeline = project?.role === "admin" || project?.role === "member"
-  const canEditProjectSettings = project?.role === "admin"
-  const canEditProjectIntegrations = project?.role === "admin" || project?.role === "member"
-  const countdownMs = homeSettings.countdown_target ? new Date(homeSettings.countdown_target).getTime() - nowTick : 0
-  const countdownPast = !!homeSettings.countdown_target && countdownMs <= 0
-  const countdownDays = Math.max(0, Math.floor(countdownMs / DAY_MS))
-  const countdownHours = Math.max(0, Math.floor((countdownMs % DAY_MS) / (60 * 60 * 1000)))
-  const countdownMinutes = Math.max(0, Math.floor((countdownMs % (60 * 60 * 1000)) / (60 * 1000)))
-  const countdownSeconds = Math.max(0, Math.floor((countdownMs % (60 * 1000)) / 1000))
-  const docOptions = buildDocOptions(docs)
-  const docTree = buildDocTree(docOptions)
-  const docById = new Map(docOptions.map(doc => [doc.id, doc]))
-  const peopleOptions: PersonOption[] = []
-  const personLookupEntries: [string, PersonOption][] = []
-  const seenPeopleKeys = new Set<string>()
-
-  function pushPerson(value: string, label: string, search: string, aliases: string[]) {
-    const keys = Array.from(new Set([value, label, ...aliases].map(item => item.trim().toLowerCase()).filter(Boolean)))
-    if (!value.trim() || keys.some(key => seenPeopleKeys.has(key))) {
-      const existing = keys.map(key => personLookupEntries.find(([alias]) => alias === key)?.[1]).find(Boolean)
-      if (existing) {
-        keys.forEach(key => personLookupEntries.push([key, existing]))
-      }
-      return
-    }
-    const option = { value, label, search: search.toLowerCase() }
-    keys.forEach(key => {
-      seenPeopleKeys.add(key)
-      personLookupEntries.push([key, option])
-    })
-    peopleOptions.push(option)
-  }
-
-  contacts.forEach(c => {
-    pushPerson(c.handle, c.name || c.handle, `${c.name} ${c.handle} ${c.email}`, [c.email, c.handle, c.name])
-  })
-  members.filter(m => m.status === "active").forEach(m => {
-    const label = m.name || m.email.split("@", 1)[0]
-    pushPerson(m.email, label, `${m.name} ${m.email}`, [m.email, label])
-  })
-
-  const personByValue = new Map(personLookupEntries)
-
-  function floatingStyle(x: number, y: number, width: number, height: number): CSSProperties {
-    if (typeof window === "undefined") return { left: x + 12, top: y + 12 }
-    return {
-      left: clamp(x + 12, 12, window.innerWidth - width - 12),
-      top: clamp(y + 12, 12, window.innerHeight - height - 12),
-    }
-  }
-
-  function toggleDocDir(path: string) {
-    setExpandedDocDirs(prev => {
-      const next = new Set(prev)
-      if (next.has(path)) next.delete(path)
-      else next.add(path)
-      return next
-    })
-  }
-
-  function renderDocNode(node: DocTreeNode, depth = 0): ReactNode {
-    if (node.type === "dir") {
-      const open = expandedDocDirs.has(node.path)
-      return (
-        <div key={node.path}>
-          <button type="button" onClick={() => toggleDocDir(node.path)}
-            className="flex w-full items-center gap-1 rounded px-1.5 py-1 text-left text-xs text-gray-600 hover:bg-gray-50"
-            style={{ paddingLeft: 6 + depth * 14 }}>
-            <span className="w-3 text-gray-400">{open ? "−" : "+"}</span>
-            <span className="truncate">{node.name}</span>
-          </button>
-          {open && node.children?.map(child => renderDocNode(child, depth + 1))}
-        </div>
-      )
-    }
-    const selected = !!timelineEditor?.doc_ids.includes(node.doc!.id)
-    return (
-      <button key={node.path} type="button" onClick={() => addEditorDoc(node.doc!.id)}
-        disabled={selected}
-        className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45"
-        style={{ paddingLeft: 6 + depth * 14 }}>
-        <span className="min-w-0 truncate text-gray-700">{node.name}</span>
-        <span className="shrink-0 text-[10px] text-gray-400">{selected ? "Added" : "Add"}</span>
-      </button>
-    )
-  }
-
-  function personLabel(value: string) {
-    const person = personByValue.get(value) || personByValue.get(value.trim().toLowerCase())
-    return person?.label || value.replace(/^@/, "").split("@", 1)[0]
-  }
-
+  // ── Render ────────────────────────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full overflow-hidden">
-      <div className="flex-1 overflow-auto p-6 space-y-6">
-        <div className="rounded-xl border bg-white shadow-sm">
-          <div className="border-b px-5 py-4">
-            <h2 className="text-lg font-semibold">{project?.name || "Project"}</h2>
-            <p className="mt-0.5 text-xs text-gray-400">Project settings, shared integrations, and countdown live here.</p>
-          </div>
+    <>
+      {/* Global flip animation keyframes */}
+      <style>{`
+        @keyframes rbFlipTop { 0%{transform:rotateX(0deg);opacity:1} 100%{transform:rotateX(-90deg);opacity:0.2} }
+        @keyframes rbFlipBot { 0%{transform:rotateX(90deg);opacity:0.2} 100%{transform:rotateX(0deg);opacity:1} }
+      `}</style>
 
-          {(projectSettingsMsg || projectSettingsError) && (
-            <div className={`mx-5 mt-4 flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${projectSettingsError ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
-              <CheckCircle2 size={14} className="mt-0.5" />
-              <p className="whitespace-pre-line">{projectSettingsError || projectSettingsMsg}</p>
-            </div>
-          )}
+      <div className="h-full overflow-y-auto bg-gray-50">
 
-          <div className="grid gap-5 p-5 xl:grid-cols-2">
-            <form onSubmit={saveProjectName} className="space-y-3">
-              <div>
-                <p className="text-sm font-medium">Project name</p>
-                <p className="mt-0.5 text-xs text-gray-400">Only admins can rename a project.</p>
-              </div>
-              <div className="flex gap-2">
-                <input value={projectName} onChange={e => setProjectName(e.target.value)}
-                  disabled={!canEditProjectSettings}
-                  className="min-w-0 flex-1 rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50 disabled:text-gray-400" />
-                <button disabled={!canEditProjectSettings || settingsBusy === "project"}
-                  className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50">
-                  {settingsBusy === "project" ? "Saving…" : "Save"}
+        {/* ── 1. Project name banner ── */}
+        <div className="bg-white border-b px-6 py-8">
+          <div className="max-w-5xl mx-auto">
+            {editingName ? (
+              <form onSubmit={saveName} className="flex items-center gap-3">
+                <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)}
+                  className="min-w-0 flex-1 rounded-xl border border-gray-300 px-4 py-2 text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-black sm:text-5xl"
+                />
+                <button type="submit" disabled={nameBusy}
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-white shadow hover:bg-gray-800 disabled:opacity-50">
+                  <Check size={18} />
                 </button>
-              </div>
-            </form>
-
-            <form onSubmit={saveHomeSettings} className="space-y-3">
-              <div className="flex items-center gap-2">
-                <CalendarClock size={16} />
-                <div>
-                  <p className="text-sm font-medium">Countdown</p>
-                  <p className="mt-0.5 text-xs text-gray-400">Stored in the project repo for humans and agents.</p>
-                </div>
-              </div>
-              <div className="grid gap-2 sm:grid-cols-[1fr_190px_auto]">
-                <input value={homeSettings.countdown_title} onChange={e => setHomeSettings({ ...homeSettings, countdown_title: e.target.value })}
-                  placeholder="Deadline title"
-                  disabled={!canEditTimeline}
-                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                <input type="datetime-local" value={homeSettings.countdown_target} onChange={e => setHomeSettings({ ...homeSettings, countdown_target: e.target.value })}
-                  disabled={!canEditTimeline}
-                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                <button disabled={!canEditTimeline || settingsBusy === "home"}
-                  className="rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                  Save
+                <button type="button" onClick={() => { setEditingName(false); setNameInput(project?.name || "") }}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border text-gray-500 hover:bg-gray-50">
+                  <X size={18} />
                 </button>
-              </div>
-              {homeSettings.countdown_target ? (
-                <div className="rounded-lg bg-gray-950 px-3 py-3 text-white">
-                  <p className="text-xs text-white/60">{homeSettings.countdown_title || "Countdown"}</p>
-                  <p className="mt-1 font-mono text-lg">
-                    {countdownPast ? "Due now" : `${countdownDays}d ${countdownHours}h ${countdownMinutes}m ${countdownSeconds}s`}
-                  </p>
-                </div>
-              ) : (
-                <p className="rounded-lg bg-gray-50 px-3 py-3 text-xs text-gray-400">No countdown set.</p>
-              )}
-            </form>
-
-            <section className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Folder size={16} />
-                <div>
-                  <p className="text-sm font-medium">Google Drive</p>
-                  <p className="mt-0.5 text-xs text-gray-400">Choose this project’s Drive folder.</p>
-                </div>
-              </div>
-              <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-500">
-                {driveRoot?.configured ? (
-                  <div className="flex items-center gap-2">
-                    <div className="min-w-0 flex-1">
-                      <p>Bound folder: <b className="text-gray-800">{driveRoot.root_folder_name}</b></p>
-                      <p className="mt-0.5 truncate font-mono text-[11px]">{driveRoot.root_folder_id}</p>
-                    </div>
-                    {driveRoot.root_folder_link && (
-                      <a href={driveRoot.root_folder_link} target="_blank" rel="noreferrer"
-                        className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1 text-blue-600 hover:bg-blue-50">
-                        Open <ExternalLink size={11} />
-                      </a>
-                    )}
-                  </div>
-                ) : driveConnected ? (
-                  <span>No Drive folder selected for this project.</span>
-                ) : (
-                  <span>Connect Google Drive in global Settings first.</span>
-                )}
-              </div>
-              <div className="grid gap-2">
-                <select value={driveMode} onChange={e => setDriveMode(e.target.value as any)}
-                  disabled={!canEditProjectIntegrations || !driveConnected}
-                  className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
-                  <option value="default">Use ResearchBuddy / project name</option>
-                  <option value="existing">Use an existing Drive folder</option>
-                  <option value="new">Create a new Drive folder</option>
-                </select>
-                {driveMode === "existing" && (
-                  <input value={folderUrl} onChange={e => setFolderUrl(e.target.value)}
-                    placeholder="Drive folder URL or id"
-                    disabled={!canEditProjectIntegrations || !driveConnected}
-                    className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                )}
-                {driveMode === "new" && (
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    <input value={folderName} onChange={e => setFolderName(e.target.value)}
-                      placeholder="Folder name"
-                      disabled={!canEditProjectIntegrations || !driveConnected}
-                      className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                    <input value={parentFolderUrl} onChange={e => setParentFolderUrl(e.target.value)}
-                      placeholder="Optional parent folder URL"
-                      disabled={!canEditProjectIntegrations || !driveConnected}
-                      className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                  </div>
-                )}
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={saveDriveRoot}
-                    disabled={!canEditProjectIntegrations || !driveConnected || settingsBusy === "drive"}
-                    className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50">
-                    {settingsBusy === "drive" ? "Saving…" : "Save Drive folder"}
+              </form>
+            ) : (
+              <div className="flex items-center gap-4 group">
+                <h1 className="text-4xl font-bold text-gray-900 sm:text-5xl leading-tight">
+                  {project?.name}
+                </h1>
+                {isAdmin && (
+                  <button onClick={() => setEditingName(true)}
+                    className="flex h-9 w-9 items-center justify-center rounded-full text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-gray-100 hover:text-gray-600"
+                    title="Rename project">
+                    <Pencil size={16} />
                   </button>
-                  <select value={syncScope} onChange={e => setSyncScope(e.target.value as any)}
-                    className="rounded-lg border px-2 py-2 text-xs text-gray-600">
-                    <option value="all">Docs and meetings</option>
-                    <option value="docs">Docs only</option>
-                    <option value="meetings">Meetings only</option>
-                  </select>
-                  <select value={syncMode} onChange={e => setSyncMode(e.target.value as any)}
-                    className="rounded-lg border px-2 py-2 text-xs text-gray-600">
-                    <option value="mapped">Update mapped</option>
-                    <option value="new">Create new</option>
-                  </select>
-                  <button type="button" onClick={syncProjectDrive}
-                    disabled={!canEditProjectIntegrations || !driveConnected || settingsBusy === "sync"}
-                    className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                    <RefreshCw size={13} /> {settingsBusy === "sync" ? "Syncing…" : "Sync"}
-                  </button>
-                </div>
-                {syncResult && (
-                  <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">
-                    Synced to {syncResult.root.root_folder_name}. Docs: {syncResult.docs?.synced ?? 0}; Meetings: {syncResult.meetings?.synced ?? 0}.
-                  </p>
                 )}
               </div>
-            </section>
-
-            <form onSubmit={saveZotero} className="space-y-3">
-              <div className="flex items-center gap-2">
-                <Database size={16} />
-                <div>
-                  <p className="text-sm font-medium">Zotero</p>
-                  <p className="mt-0.5 text-xs text-gray-400">Project library used by Papers.</p>
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <input value={zoteroConfig.api_key}
-                  onChange={e => setZoteroConfig({ ...zoteroConfig, api_key: e.target.value })}
-                  placeholder={zoteroConfig.api_key_set ? "API key already saved. Leave blank to keep it." : "Zotero API key"}
-                  disabled={!canEditProjectSettings}
-                  className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                <div className="grid gap-2 sm:grid-cols-[1fr_130px]">
-                  <input value={zoteroConfig.library_id}
-                    onChange={e => setZoteroConfig({ ...zoteroConfig, library_id: e.target.value })}
-                    placeholder="Library ID"
-                    disabled={!canEditProjectSettings}
-                    className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50" />
-                  <select value={zoteroConfig.library_type}
-                    onChange={e => setZoteroConfig({ ...zoteroConfig, library_type: e.target.value as "user" | "group" })}
-                    disabled={!canEditProjectSettings}
-                    className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
-                    <option value="user">User</option>
-                    <option value="group">Group</option>
-                  </select>
-                </div>
-                <button disabled={!canEditProjectSettings || settingsBusy === "zotero"}
-                  className="w-fit rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
-                  {settingsBusy === "zotero" ? "Saving…" : "Save Zotero"}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-
-        {/* ── Gantt Chart ── */}
-        <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b flex items-center justify-between">
-            <div>
-              <h3 className="font-semibold text-sm">Project Timeline</h3>
-            </div>
-            {canEditTimeline && (
-              <button onClick={() => setAddTrack(v => !v)}
-                className="inline-flex items-center gap-1 text-xs bg-black text-white px-3 py-1.5 rounded-lg">
-                <Plus size={12} /> Add track
-              </button>
             )}
           </div>
+        </div>
 
-          {addTrack && canEditTimeline && (
-            <form onSubmit={createTrack} className="flex items-center gap-2 px-5 py-2 bg-gray-50 border-b">
-              <input autoFocus value={trackName} onChange={e => setTrackName(e.target.value)}
-                placeholder="Track name" required
-                className="flex-1 border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-black" />
-              <div className="flex gap-1">
-                {TRACK_COLORS.map(c => (
-                  <button key={c} type="button" onClick={() => setTrackColor(c)}
-                    style={{ background: c }}
-                    className={`w-5 h-5 rounded-full border-2 ${trackColor === c ? "border-black" : "border-transparent"}`} />
-                ))}
+        {/* ── 2. Countdown ── */}
+        <div
+          className="bg-gray-950 relative overflow-hidden"
+          onClick={() => { if (canEdit && !editingCountdown) { setEditingCountdown(true); setCountdownForm(homeSettings) } }}
+          style={{ cursor: canEdit && !editingCountdown ? "pointer" : "default" }}
+        >
+          {editingCountdown ? (
+            <form onSubmit={saveCountdown} onClick={e => e.stopPropagation()}
+              className="max-w-lg mx-auto px-6 py-10 space-y-4">
+              <p className="text-white/70 text-sm font-medium mb-6">Set countdown target</p>
+              <div className="space-y-3">
+                <input
+                  autoFocus
+                  value={countdownForm.countdown_title}
+                  onChange={e => setCountdownForm({ ...countdownForm, countdown_title: e.target.value })}
+                  placeholder="Deadline title (e.g. CHI 2027)"
+                  className="w-full rounded-xl bg-white/10 px-4 py-3 text-white placeholder-white/30 text-lg focus:outline-none focus:ring-2 focus:ring-white/30"
+                />
+                <input
+                  type="datetime-local"
+                  value={countdownForm.countdown_target}
+                  onChange={e => setCountdownForm({ ...countdownForm, countdown_target: e.target.value })}
+                  className="w-full rounded-xl bg-white/10 px-4 py-3 text-white text-sm focus:outline-none focus:ring-2 focus:ring-white/30"
+                  style={{ colorScheme: "dark" }}
+                />
               </div>
-              <button type="submit" className="text-xs bg-black text-white px-3 py-1.5 rounded-lg">Create</button>
-              <button type="button" onClick={() => setAddTrack(false)} className="text-gray-400 hover:text-black"><X size={14} /></button>
+              <div className="flex gap-3 pt-2">
+                <button type="submit" disabled={countdownBusy}
+                  className="rounded-xl bg-white px-6 py-2.5 text-sm font-semibold text-black hover:bg-gray-100 disabled:opacity-50">
+                  {countdownBusy ? "Saving…" : "Save"}
+                </button>
+                <button type="button" onClick={() => setEditingCountdown(false)}
+                  className="rounded-xl border border-white/20 px-6 py-2.5 text-sm text-white/60 hover:bg-white/5">
+                  Cancel
+                </button>
+              </div>
             </form>
-          )}
-
-          {gantt.tracks.length === 0 ? (
-            <div className="px-5 py-10 text-center text-sm text-gray-400">
-              No tracks yet. Add a track to start planning.
+          ) : !homeSettings.countdown_target ? (
+            <div className="py-16 text-center">
+              <p className="text-white/20 text-sm">{canEdit ? "Click to set a deadline countdown" : "No countdown set"}</p>
             </div>
           ) : (
-            <div className="flex overflow-hidden">
-              {/* Track labels (fixed left) */}
-              <div className="w-40 flex-shrink-0 border-r">
-                <div className="h-9 border-b bg-gray-50 px-3 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-400">
-                  Tracks
+            <div className="py-12 px-6 text-center select-none">
+              {homeSettings.countdown_title && (
+                <p className="mb-8 text-lg font-medium tracking-wide text-white/60 sm:text-xl">
+                  {homeSettings.countdown_title}
+                </p>
+              )}
+              {countdownPast ? (
+                <p className="text-5xl font-bold text-white">Time&apos;s up!</p>
+              ) : (
+                <div className="flex items-center justify-center gap-4 sm:gap-8">
+                  <FlipUnit value={cdDays}    label="Days" />
+                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <FlipUnit value={cdHours}   label="Hours" />
+                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <FlipUnit value={cdMinutes} label="Minutes" />
+                  <span className="mb-6 text-4xl font-bold text-white/30 sm:text-5xl">:</span>
+                  <FlipUnit value={cdSeconds} label="Seconds" />
                 </div>
-                {gantt.tracks.map(track => (
-                  <div key={track.id} className="group h-16 border-b px-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: track.color }} />
-                      <span className="text-xs font-medium truncate">{track.name}</span>
-                    </div>
-                    {canEditTimeline && (
-                      <div className="hidden group-hover:flex items-center gap-1">
-                        <button onClick={() => deleteTrack(track.id)} className="p-0.5 text-gray-400 hover:text-red-500"><Trash2 size={11} /></button>
+              )}
+              {canEdit && (
+                <p className="mt-8 text-[11px] text-white/20 tracking-wide">Click to edit</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Content area ── */}
+        <div className="max-w-5xl mx-auto px-4 py-6 space-y-5">
+
+          {/* ── 3. Timeline ── */}
+          <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+            <div className="border-b px-5 py-3 flex items-center justify-between">
+              <h3 className="font-semibold text-sm">Project Timeline</h3>
+              {canEdit && (
+                <button onClick={() => setAddTrack(v=>!v)}
+                  className="inline-flex items-center gap-1 text-xs bg-black text-white px-3 py-1.5 rounded-lg">
+                  <Plus size={12} /> Add track
+                </button>
+              )}
+            </div>
+            {addTrack && canEdit && (
+              <form onSubmit={createTrack} className="flex items-center gap-2 px-5 py-2 bg-gray-50 border-b">
+                <input autoFocus value={trackName} onChange={e=>setTrackName(e.target.value)} placeholder="Track name" required
+                  className="flex-1 border rounded-lg px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-black" />
+                <div className="flex gap-1">
+                  {TRACK_COLORS.map(c=><button key={c} type="button" onClick={()=>setTrackColor(c)} style={{background:c}} className={`w-5 h-5 rounded-full border-2 ${trackColor===c?"border-black":"border-transparent"}`} />)}
+                </div>
+                <button type="submit" className="text-xs bg-black text-white px-3 py-1.5 rounded-lg">Create</button>
+                <button type="button" onClick={()=>setAddTrack(false)} className="text-gray-400 hover:text-black"><X size={14}/></button>
+              </form>
+            )}
+            {gantt.tracks.length===0 ? (
+              <div className="px-5 py-10 text-center text-sm text-gray-400">No tracks yet. Add a track to start planning.</div>
+            ) : (
+              <div className="flex overflow-hidden">
+                <div className="w-40 flex-shrink-0 border-r">
+                  <div className="h-9 border-b bg-gray-50 px-3 py-2 text-[10px] font-medium uppercase tracking-wide text-gray-400">Tracks</div>
+                  {gantt.tracks.map(track=>(
+                    <div key={track.id} className="group h-16 border-b px-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:track.color}} />
+                        <span className="text-xs font-medium truncate">{track.name}</span>
                       </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Scrollable timeline */}
-              <div className="flex-1 overflow-x-auto" ref={scrollRef} onWheel={handleTimelineWheel}>
-                <div style={{ width: totalWidth + "px", minWidth: "100%" }}>
-                  {/* Month headers */}
-                  <div className="h-9 border-b bg-gray-50 flex items-end">
-                    {months.map((m, i) => (
-                      <div key={i} style={{ width: monthWidth + "px" }}
-                        className="flex-shrink-0 px-2 pb-1 text-[10px] text-gray-500 font-medium border-r">
-                        {m.label}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Tracks */}
-                  {gantt.tracks.map(track => (
-                    <div key={track.id}
-                      className={`h-16 border-b relative flex items-center ${canEditTimeline ? "cursor-crosshair" : ""}`}
-                      onClick={e => {
-                        if (!canEditTimeline) return
-                        if (!scrollRef.current) return
-                        const rect = scrollRef.current.getBoundingClientRect()
-                        const x = e.clientX - rect.left + scrollRef.current.scrollLeft
-                        openCreateItem(track.id, dateForX(x), e.clientX, e.clientY)
-                      }}>
-                      {/* Month grid lines */}
-                      {months.map((_, i) => (
-                        <div key={i} style={{ left: i * monthWidth, width: monthWidth }}
-                          className="absolute top-0 bottom-0 border-r border-gray-100" />
-                      ))}
-                      {/* Today line */}
-                      <div className="absolute top-0 bottom-0 w-px bg-red-300 z-10"
-                        style={{ left: xForDate(formatDate(now.getTime())) }} />
-
-                      {/* Items */}
-                      {track.items.map(item => {
-                        const left = xForDate(item.start)
-                        const width = Math.max(xForDate(item.end) - left, 36)
-                        const docIds = normalizeDocIds(item)
-                        return (
-                          <div key={item.id}
-                            className={`absolute h-8 rounded-md flex items-center px-2 text-white text-[11px] font-medium cursor-pointer group z-20 shadow-sm transition-opacity ${draggingItem === item.id ? "opacity-80" : "hover:opacity-90"}`}
-                            style={{ left, width, background: track.color }}
-                            onMouseEnter={e => setHoveredItem({ item, track, x: e.clientX, y: e.clientY })}
-                            onMouseMove={e => setHoveredItem(prev => prev?.item.id === item.id ? { ...prev, x: e.clientX, y: e.clientY } : prev)}
-                            onMouseLeave={() => setHoveredItem(prev => prev?.item.id === item.id ? null : prev)}
-                            onClick={e => { e.stopPropagation(); if (canEditTimeline) openEditItem(track, item, e.clientX, e.clientY) }}
-                          >
-                            {canEditTimeline && (
-                              <span onMouseDown={e => startResize(e, track.id, item, "start")}
-                                className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-white/0 hover:bg-white/30" />
-                            )}
-                            <span className="truncate">{item.title}</span>
-                            {docIds.length ? (
-                              <span className="ml-1 opacity-75 text-[10px]">docs {docIds.length}</span>
-                            ) : null}
-                            {item.mentions?.length ? (
-                              <span className="ml-1 opacity-75 text-[10px]">{personLabel(item.mentions[0])}{item.mentions.length > 1 ? ` +${item.mentions.length-1}` : ""}</span>
-                            ) : null}
-                            {canEditTimeline && (
-                              <span onMouseDown={e => startResize(e, track.id, item, "end")}
-                                className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-white/0 hover:bg-white/30" />
-                            )}
-                          </div>
-                        )
-                      })}
-                      {timelineEditor?.mode === "create" && timelineEditor.trackId === track.id && (() => {
-                        const left = xForDate(timelineEditor.start)
-                        const width = Math.max(xForDate(timelineEditor.end) - left, 36)
-                        return (
-                          <div
-                            className="absolute z-30 flex h-8 items-center rounded-md border border-white/70 px-2 text-[11px] font-medium text-white shadow-sm ring-2 ring-black/10"
-                            style={{ left, width, background: track.color, opacity: 0.78 }}
-                            onClick={e => e.stopPropagation()}
-                          >
-                            <span onMouseDown={e => startDraftResize(e, "start")}
-                              className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-white/0 hover:bg-white/30" />
-                            <span className="truncate">{timelineEditor.title.trim() || "New item"}</span>
-                            <span onMouseDown={e => startDraftResize(e, "end")}
-                              className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-white/0 hover:bg-white/30" />
-                          </div>
-                        )
-                      })()}
+                      {canEdit && <div className="hidden group-hover:flex items-center gap-1"><button onClick={()=>deleteTrack(track.id)} className="p-0.5 text-gray-400 hover:text-red-500"><Trash2 size={11}/></button></div>}
                     </div>
                   ))}
                 </div>
+                <div className="flex-1 overflow-x-auto" ref={scrollRef} onWheel={handleTimelineWheel}>
+                  <div style={{width:totalWidth+"px",minWidth:"100%"}}>
+                    <div className="h-9 border-b bg-gray-50 flex items-end">
+                      {months.map((m,i)=><div key={i} style={{width:monthWidth+"px"}} className="flex-shrink-0 px-2 pb-1 text-[10px] text-gray-500 font-medium border-r">{m.label}</div>)}
+                    </div>
+                    {gantt.tracks.map(track=>(
+                      <div key={track.id} className={`h-16 border-b relative flex items-center ${canEdit?"cursor-crosshair":""}`}
+                        onClick={e=>{if(!canEdit||!scrollRef.current)return;const rect=scrollRef.current.getBoundingClientRect();const x=e.clientX-rect.left+scrollRef.current.scrollLeft;openCreateItem(track.id,dateForX(x),e.clientX,e.clientY)}}>
+                        {months.map((_,i)=><div key={i} style={{left:i*monthWidth,width:monthWidth}} className="absolute top-0 bottom-0 border-r border-gray-100"/>)}
+                        <div className="absolute top-0 bottom-0 w-px bg-red-300 z-10" style={{left:xForDate(formatDate(now.getTime()))}}/>
+                        {track.items.map(item=>{
+                          const left=xForDate(item.start); const width=Math.max(xForDate(item.end)-left,36); const docIds=normalizeDocIds(item)
+                          return (
+                            <div key={item.id} className={`absolute h-8 rounded-md flex items-center px-2 text-white text-[11px] font-medium cursor-pointer group z-20 shadow-sm transition-opacity ${draggingItem===item.id?"opacity-80":"hover:opacity-90"}`}
+                              style={{left,width,background:track.color}}
+                              onMouseEnter={e=>setHoveredItem({item,track,x:e.clientX,y:e.clientY})}
+                              onMouseMove={e=>setHoveredItem(prev=>prev?.item.id===item.id?{...prev,x:e.clientX,y:e.clientY}:prev)}
+                              onMouseLeave={()=>setHoveredItem(prev=>prev?.item.id===item.id?null:prev)}
+                              onClick={e=>{e.stopPropagation();if(canEdit)openEditItem(track,item,e.clientX,e.clientY)}}>
+                              {canEdit&&<span onMouseDown={e=>startResize(e,track.id,item,"start")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-white/0 hover:bg-white/30"/>}
+                              <span className="truncate">{item.title}</span>
+                              {docIds.length?<span className="ml-1 opacity-75 text-[10px]">docs {docIds.length}</span>:null}
+                              {item.mentions?.length?<span className="ml-1 opacity-75 text-[10px]">{personLabel(item.mentions[0])}{item.mentions.length>1?` +${item.mentions.length-1}`:""}</span>:null}
+                              {canEdit&&<span onMouseDown={e=>startResize(e,track.id,item,"end")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-white/0 hover:bg-white/30"/>}
+                            </div>
+                          )
+                        })}
+                        {timelineEditor?.mode==="create"&&timelineEditor.trackId===track.id&&(()=>{
+                          const left=xForDate(timelineEditor.start); const width=Math.max(xForDate(timelineEditor.end)-left,36)
+                          return <div className="absolute z-30 flex h-8 items-center rounded-md border border-white/70 px-2 text-[11px] font-medium text-white shadow-sm ring-2 ring-black/10" style={{left,width,background:track.color,opacity:0.78}} onClick={e=>e.stopPropagation()}>
+                            <span onMouseDown={e=>startDraftResize(e,"start")} className="absolute left-0 top-0 h-full w-2 cursor-ew-resize rounded-l-md bg-white/0 hover:bg-white/30"/>
+                            <span className="truncate">{timelineEditor.title.trim()||"New item"}</span>
+                            <span onMouseDown={e=>startDraftResize(e,"end")} className="absolute right-0 top-0 h-full w-2 cursor-ew-resize rounded-r-md bg-white/0 hover:bg-white/30"/>
+                          </div>
+                        })()}
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
+            )}
+          </div>
+
+          {/* Hovered timeline item tooltip */}
+          {hoveredItem && !timelineEditor && (
+            <div className="fixed z-50 w-72 rounded-lg border bg-white p-3 text-xs shadow-xl pointer-events-none" style={floatingStyle(hoveredItem.x,hoveredItem.y,288,170)}>
+              <p className="font-medium text-gray-900">{hoveredItem.item.title}</p>
+              <p className="mt-1 text-gray-400">{hoveredItem.track.name} · {hoveredItem.item.start} to {hoveredItem.item.end}</p>
+              {normalizeDocIds(hoveredItem.item).length>0&&<div className="mt-2 space-y-1 text-gray-500">{normalizeDocIds(hoveredItem.item).map(id=>{const d=docById.get(id);return<p key={id} className="truncate">{d?docDisplay(d):id}</p>})}</div>}
+              {hoveredItem.item.mentions?.length?<p className="mt-1 text-gray-500">{hoveredItem.item.mentions.map(personLabel).join(", ")}</p>:null}
+              {hoveredItem.item.note&&<p className="mt-2 line-clamp-3 text-gray-500">{hoveredItem.item.note}</p>}
             </div>
           )}
-        </div>
 
-        {hoveredItem && !timelineEditor && (
-          <div className="fixed z-50 w-72 rounded-lg border bg-white p-3 text-xs shadow-xl pointer-events-none"
-            style={floatingStyle(hoveredItem.x, hoveredItem.y, 288, 170)}>
-            <p className="font-medium text-gray-900">{hoveredItem.item.title}</p>
-            <p className="mt-1 text-gray-400">{hoveredItem.track.name} · {hoveredItem.item.start} to {hoveredItem.item.end}</p>
-            {normalizeDocIds(hoveredItem.item).length > 0 && (
-              <div className="mt-2 space-y-1 text-gray-500">
-                {normalizeDocIds(hoveredItem.item).map(docId => {
-                  const doc = docById.get(docId)
-                  return <p key={docId} className="truncate">{doc ? docDisplay(doc) : docId}</p>
-                })}
+          {/* Timeline item editor popup */}
+          {timelineEditor && (
+            <form onSubmit={saveTimelineItem} className="fixed z-50 max-h-[calc(100vh-24px)] w-[380px] overflow-y-auto rounded-xl border bg-white p-4 shadow-2xl" style={floatingStyle(timelineEditor.x,timelineEditor.y,380,660)}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div><p className="text-sm font-semibold">{timelineEditor.mode==="create"?"New timeline item":"Edit timeline item"}</p><p className="text-xs text-gray-400">{gantt.tracks.find(t=>t.id===timelineEditor.trackId)?.name}</p></div>
+                <button type="button" onClick={()=>setTimelineEditor(null)} className="rounded-md p-1 text-gray-400 hover:bg-gray-50 hover:text-black"><X size={14}/></button>
               </div>
-            )}
-            {hoveredItem.item.mentions?.length ? (
-              <p className="mt-1 text-gray-500">{hoveredItem.item.mentions.map(personLabel).join(", ")}</p>
-            ) : null}
-            {hoveredItem.item.note && <p className="mt-2 line-clamp-3 text-gray-500">{hoveredItem.item.note}</p>}
-          </div>
-        )}
-
-        {timelineEditor && (
-          <form onSubmit={saveTimelineItem}
-            className="fixed z-50 max-h-[calc(100vh-24px)] w-[380px] overflow-y-auto rounded-xl border bg-white p-4 shadow-2xl"
-            style={floatingStyle(timelineEditor.x, timelineEditor.y, 380, 660)}>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold">{timelineEditor.mode === "create" ? "New timeline item" : "Edit timeline item"}</p>
-                <p className="text-xs text-gray-400">{gantt.tracks.find(t => t.id === timelineEditor.trackId)?.name}</p>
-              </div>
-              <button type="button" onClick={() => setTimelineEditor(null)} className="rounded-md p-1 text-gray-400 hover:bg-gray-50 hover:text-black">
-                <X size={14} />
-              </button>
-            </div>
-            <div className="space-y-3">
-              <label className="block">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Title</span>
-                <input autoFocus required value={timelineEditor.title}
-                  onChange={e => setTimelineEditor({ ...timelineEditor, title: e.target.value })}
-                  className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-black" />
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Start</span>
-                  <input type="date" required value={timelineEditor.start}
-                    onChange={e => setTimelineEditor({ ...timelineEditor, start: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black" />
-                </label>
-                <label className="block">
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">End</span>
-                  <input type="date" required value={timelineEditor.end}
-                    onChange={e => setTimelineEditor({ ...timelineEditor, end: e.target.value })}
-                    className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black" />
-                </label>
-              </div>
-              <div>
-                <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Linked docs</span>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {timelineEditor.doc_ids.map(docId => {
-                    const doc = docById.get(docId)
-                    return (
-                      <span key={docId} className="inline-flex max-w-full items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-700">
-                        <span className="truncate">{doc ? docDisplay(doc) : docId}</span>
-                        <button type="button" onClick={() => removeEditorDoc(docId)} className="text-blue-400 hover:text-blue-700">
-                          <X size={10} />
-                        </button>
-                      </span>
-                    )
-                  })}
+              <div className="space-y-3">
+                <label className="block"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Title</span><input autoFocus required value={timelineEditor.title} onChange={e=>setTimelineEditor({...timelineEditor,title:e.target.value})} className="mt-1 w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-black"/></label>
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Start</span><input type="date" required value={timelineEditor.start} onChange={e=>setTimelineEditor({...timelineEditor,start:e.target.value})} className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black"/></label>
+                  <label className="block"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">End</span><input type="date" required value={timelineEditor.end} onChange={e=>setTimelineEditor({...timelineEditor,end:e.target.value})} className="mt-1 w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black"/></label>
                 </div>
-                <div className="mt-2 rounded-lg border">
-                  <div className="flex items-center gap-1 border-b px-2 py-1.5">
-                    <input value={docQuery} onChange={e => setDocQuery(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addFirstMatchingDoc() } }}
-                      placeholder="Search docs"
-                      className="min-w-0 flex-1 text-xs outline-none" />
-                    <button type="button" onClick={addFirstMatchingDoc}
-                      className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button>
-                  </div>
-                  <div className="max-h-28 overflow-auto p-1">
-                    {docQuery.trim() ? (
-                      docOptions.filter(doc => doc.search.includes(docQuery.trim().toLowerCase())).slice(0, 8).map(doc => (
-                        <button key={doc.id} type="button" onClick={() => addEditorDoc(doc.id)}
-                          disabled={timelineEditor.doc_ids.includes(doc.id)}
-                          className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45">
-                          <span className="min-w-0 truncate text-gray-700">{docDisplay(doc)}</span>
-                          <span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.doc_ids.includes(doc.id) ? "Added" : "Add"}</span>
-                        </button>
-                      ))
-                    ) : (
-                      docTree.length ? docTree.map(node => renderDocNode(node)) : <p className="px-2 py-2 text-xs text-gray-400">No docs</p>
-                    )}
+                <div>
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Linked docs</span>
+                  <div className="mt-1 flex flex-wrap gap-1.5">{timelineEditor.doc_ids.map(id=>{const d=docById.get(id);return<span key={id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-700"><span className="truncate">{d?docDisplay(d):id}</span><button type="button" onClick={()=>removeEditorDoc(id)} className="text-blue-400 hover:text-blue-700"><X size={10}/></button></span>})}</div>
+                  <div className="mt-2 rounded-lg border">
+                    <div className="flex items-center gap-1 border-b px-2 py-1.5"><input value={docQuery} onChange={e=>setDocQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addFirstMatchingDoc()}}} placeholder="Search docs" className="min-w-0 flex-1 text-xs outline-none"/><button type="button" onClick={addFirstMatchingDoc} className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button></div>
+                    <div className="max-h-28 overflow-auto p-1">{docQuery.trim()?docOptions.filter(d=>d.search.includes(docQuery.trim().toLowerCase())).slice(0,8).map(d=><button key={d.id} type="button" onClick={()=>addEditorDoc(d.id)} disabled={timelineEditor.doc_ids.includes(d.id)} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45"><span className="min-w-0 truncate text-gray-700">{docDisplay(d)}</span><span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.doc_ids.includes(d.id)?"Added":"Add"}</span></button>):docTree.length?docTree.map(n=>renderDocNode(n)):<p className="px-2 py-2 text-xs text-gray-400">No docs</p>}</div>
                   </div>
                 </div>
-              </div>
-              <div>
-                <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</span>
-                <div className="mt-1 flex flex-wrap gap-1.5">
-                  {timelineEditor.mentions.map(value => {
-                    const person = personByValue.get(value) || personByValue.get(value.trim().toLowerCase())
-                    return (
-                      <span key={value} className="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-700">
-                        <span className="truncate">{person?.label || value.replace(/^@/, "")}</span>
-                        <button type="button" onClick={() => removeEditorPerson(value)} className="text-gray-400 hover:text-gray-700">
-                          <X size={10} />
-                        </button>
-                      </span>
-                    )
-                  })}
-                </div>
-                <div className="mt-2 rounded-lg border">
-                  <div className="flex items-center gap-1 border-b px-2 py-1.5">
-                    <input value={personQuery} onChange={e => setPersonQuery(e.target.value)}
-                      onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addFirstMatchingPerson() } }}
-                      placeholder="Search people"
-                      className="min-w-0 flex-1 text-xs outline-none" />
-                    <button type="button" onClick={addFirstMatchingPerson}
-                      className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button>
-                  </div>
-                  <div className="max-h-24 overflow-auto p-1">
-                    {(personQuery.trim()
-                      ? peopleOptions.filter(person => person.search.includes(personQuery.trim().toLowerCase()))
-                      : peopleOptions
-                    ).slice(0, 8).map(person => (
-                      <button key={person.value} type="button" onClick={() => addEditorPerson(person.value)}
-                        disabled={timelineEditor.mentions.includes(person.value)}
-                        className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45">
-                        <span className="min-w-0 truncate text-gray-700">{person.label}</span>
-                        <span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.mentions.includes(person.value) ? "Added" : "Add"}</span>
-                      </button>
-                    ))}
-                    {peopleOptions.length === 0 && <p className="px-2 py-2 text-xs text-gray-400">No people</p>}
+                <div>
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</span>
+                  <div className="mt-1 flex flex-wrap gap-1.5">{timelineEditor.mentions.map(v=>{const p=personByValue.get(v)||personByValue.get(v.trim().toLowerCase());return<span key={v} className="inline-flex max-w-full items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-700"><span className="truncate">{p?.label||v.replace(/^@/,"")}</span><button type="button" onClick={()=>removeEditorPerson(v)} className="text-gray-400 hover:text-gray-700"><X size={10}/></button></span>})}</div>
+                  <div className="mt-2 rounded-lg border">
+                    <div className="flex items-center gap-1 border-b px-2 py-1.5"><input value={personQuery} onChange={e=>setPersonQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addFirstMatchingPerson()}}} placeholder="Search people" className="min-w-0 flex-1 text-xs outline-none"/><button type="button" onClick={addFirstMatchingPerson} className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button></div>
+                    <div className="max-h-24 overflow-auto p-1">{(personQuery.trim()?peopleOptions.filter(p=>p.search.includes(personQuery.trim().toLowerCase())):peopleOptions).slice(0,8).map(p=><button key={p.value} type="button" onClick={()=>addEditorPerson(p.value)} disabled={timelineEditor.mentions.includes(p.value)} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45"><span className="min-w-0 truncate text-gray-700">{p.label}</span><span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.mentions.includes(p.value)?"Added":"Add"}</span></button>)}{peopleOptions.length===0&&<p className="px-2 py-2 text-xs text-gray-400">No people</p>}</div>
                   </div>
                 </div>
+                <label className="block"><span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Note</span><textarea value={timelineEditor.note} onChange={e=>setTimelineEditor({...timelineEditor,note:e.target.value})} className="mt-1 h-16 w-full resize-none rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black"/></label>
               </div>
-              <label className="block">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Note</span>
-                <textarea value={timelineEditor.note}
-                  onChange={e => setTimelineEditor({ ...timelineEditor, note: e.target.value })}
-                  className="mt-1 h-16 w-full resize-none rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black" />
-              </label>
-            </div>
-            <div className="mt-4 flex items-center justify-between">
-              {timelineEditor.mode === "edit" && timelineEditor.itemId ? (
-                <button type="button" onClick={() => deleteItem(timelineEditor.trackId, timelineEditor.itemId!)}
-                  className="text-xs text-red-500 hover:text-red-600">Delete</button>
-              ) : <span />}
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={() => setTimelineEditor(null)}
-                  className="rounded-lg border px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50">Cancel</button>
-                <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Save</button>
+              <div className="mt-4 flex items-center justify-between">
+                {timelineEditor.mode==="edit"&&timelineEditor.itemId?<button type="button" onClick={()=>deleteItem(timelineEditor.trackId,timelineEditor.itemId!)} className="text-xs text-red-500 hover:text-red-600">Delete</button>:<span/>}
+                <div className="flex items-center gap-2">
+                  <button type="button" onClick={()=>setTimelineEditor(null)} className="rounded-lg border px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50">Cancel</button>
+                  <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Save</button>
+                </div>
               </div>
-            </div>
-          </form>
-        )}
-
-        {/* ── Team ── */}
-        <div className="border rounded-xl bg-white shadow-sm overflow-hidden">
-          <div className="px-5 py-3 border-b flex items-center justify-between">
-            <div>
-              <h3 className="font-semibold text-sm">Team access</h3>
-              <p className="mt-0.5 text-xs text-gray-400">Invite people by email and control project permissions.</p>
-            </div>
-            {canManageTeam && (
-              <button onClick={() => setAddingMember(v => !v)}
-                className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">
-                <UserPlus size={13} /> Invite
-              </button>
-            )}
-          </div>
-          {addingMember && canManageTeam && (
-            <form onSubmit={inviteMember} className="grid gap-2 border-b bg-gray-50 px-4 py-3 sm:grid-cols-[1fr_160px_auto]">
-              <input value={memberForm.email} onChange={e => setMemberForm({ ...memberForm, email: e.target.value })}
-                type="email" placeholder="teammate@lab.edu" required
-                className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
-              <select value={memberForm.role} onChange={e => setMemberForm({ ...memberForm, role: e.target.value as ProjectMember["role"] })}
-                className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none">
-                <option value="member">Can edit</option>
-                <option value="viewer">Read only</option>
-                <option value="admin">Admin</option>
-              </select>
-              <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Invite</button>
             </form>
           )}
-          {teamMsg && <p className="border-b px-5 py-2 text-xs text-gray-500 whitespace-pre-line">{teamMsg}</p>}
-          <div className="divide-y">
-            {members.length === 0 ? (
-              <p className="px-5 py-8 text-sm text-gray-400">No project members yet.</p>
-            ) : members.map(member => (
-              <div key={member.id} className="flex items-center gap-3 px-5 py-3">
-                <div className={`w-8 h-8 rounded-full text-xs font-medium flex items-center justify-center flex-shrink-0 ${
-                  member.status === "pending" ? "bg-blue-50 text-blue-600" : "bg-black text-white"
-                }`}>
-                  {member.status === "pending" ? <Mail size={14} /> : (member.name || member.email)[0]?.toUpperCase()}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <p className="text-sm font-medium truncate">{member.name || member.email}</p>
-                    {member.is_creator && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                        <Crown size={10} /> Creator
-                      </span>
-                    )}
-                    {member.status === "pending" && (
-                      <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">
-                        Not registered
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-400 truncate">{member.email}</p>
-                  <p className="mt-0.5 text-[11px] text-gray-400">{roleDescription(member.role)}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  {canManageTeam && !member.is_creator ? (
-                    <select value={member.role} onChange={e => updateMemberRole(member, e.target.value as ProjectMember["role"])}
-                      className="rounded-lg border px-2 py-1.5 text-xs text-gray-600">
-                      <option value="member">Can edit</option>
-                      <option value="viewer">Read only</option>
-                      <option value="admin">Admin</option>
-                    </select>
-                  ) : (
-                    <span className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-gray-600">
-                      <Shield size={12} /> {ROLE_LABELS[member.role]}
-                    </span>
-                  )}
-                  {canManageTeam && !member.is_creator && (
-                    <button onClick={() => removeProjectMember(member)} className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50"
-                      title={member.status === "pending" ? "Cancel invitation" : "Remove member"}>
-                      <Trash2 size={14} />
-                    </button>
-                  )}
-                </div>
+
+          {/* ── 4. Team access ── */}
+          <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+            <div className="border-b px-5 py-3 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-sm">Team access</h3>
+                <p className="mt-0.5 text-xs text-gray-400">Invite people by email and control project permissions.</p>
               </div>
-            ))}
+              {isAdmin && (
+                <button onClick={() => setAddingMember(v => !v)}
+                  className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-2.5 py-1.5 text-gray-600 hover:bg-gray-50">
+                  <UserPlus size={13}/> Invite
+                </button>
+              )}
+            </div>
+            {addingMember && isAdmin && (
+              <form onSubmit={inviteMember} className="grid gap-2 border-b bg-gray-50 px-4 py-3 sm:grid-cols-[1fr_160px_auto]">
+                <input value={memberForm.email} onChange={e=>setMemberForm({...memberForm,email:e.target.value})} type="email" placeholder="teammate@lab.edu" required className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none"/>
+                <select value={memberForm.role} onChange={e=>setMemberForm({...memberForm,role:e.target.value as ProjectMember["role"]})} className="border rounded-lg px-2 py-1.5 text-xs focus:outline-none"><option value="member">Can edit</option><option value="viewer">Read only</option><option value="admin">Admin</option></select>
+                <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Invite</button>
+              </form>
+            )}
+            {teamMsg && <p className="border-b px-5 py-2 text-xs text-gray-500 whitespace-pre-line">{teamMsg}</p>}
+            <div className="divide-y">
+              {members.length===0 ? <p className="px-5 py-8 text-sm text-gray-400">No project members yet.</p>
+                : members.map(member=>(
+                <div key={member.id} className="flex items-center gap-3 px-5 py-3">
+                  <div className={`w-8 h-8 rounded-full text-xs font-medium flex items-center justify-center flex-shrink-0 ${member.status==="pending"?"bg-blue-50 text-blue-600":"bg-black text-white"}`}>
+                    {member.status==="pending"?<Mail size={14}/>:(member.name||member.email)[0]?.toUpperCase()}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium truncate">{member.name||member.email}</p>
+                      {member.is_creator&&<span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-700"><Crown size={10}/>Creator</span>}
+                      {member.status==="pending"&&<span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-600">Not registered</span>}
+                    </div>
+                    <p className="text-xs text-gray-400 truncate">{member.email}</p>
+                    <p className="mt-0.5 text-[11px] text-gray-400">{roleDescription(member.role)}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {isAdmin&&!member.is_creator
+                      ? <select value={member.role} onChange={e=>updateMemberRole(member,e.target.value as ProjectMember["role"])} className="rounded-lg border px-2 py-1.5 text-xs text-gray-600"><option value="member">Can edit</option><option value="viewer">Read only</option><option value="admin">Admin</option></select>
+                      : <span className="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs text-gray-600"><Shield size={12}/>{ROLE_LABELS[member.role]}</span>
+                    }
+                    {isAdmin&&!member.is_creator&&<button onClick={()=>removeProjectMember(member)} className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50" title={member.status==="pending"?"Cancel invitation":"Remove member"}><Trash2 size={14}/></button>}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
+
+          {/* ── 5. Project Settings (collapsible, admin only) ── */}
+          {isAdmin && (
+            <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+              <button
+                onClick={() => setSettingsOpen(v => !v)}
+                className="w-full flex items-center justify-between px-5 py-4 text-sm font-semibold hover:bg-gray-50 transition-colors"
+              >
+                <span>Project Settings</span>
+                {settingsOpen ? <ChevronDown size={16} className="text-gray-400"/> : <ChevronRight size={16} className="text-gray-400"/>}
+              </button>
+
+              {settingsOpen && (
+                <div className="border-t px-5 pb-6 pt-5 space-y-6">
+                  {(settingsMsg || settingsError) && (
+                    <div className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${settingsError?"bg-red-50 text-red-700":"bg-green-50 text-green-700"}`}>
+                      <p className="whitespace-pre-line">{settingsError || settingsMsg}</p>
+                    </div>
+                  )}
+
+                  {/* Google Drive */}
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Folder size={15} className="text-gray-500"/>
+                      <div>
+                        <p className="text-sm font-medium">Google Drive</p>
+                        <p className="text-xs text-gray-400">Choose this project&apos;s Drive folder for syncing docs and meetings.</p>
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-500">
+                      {driveRoot?.configured ? (
+                        <div className="flex items-center gap-2">
+                          <div className="min-w-0 flex-1"><p>Bound: <b className="text-gray-800">{driveRoot.root_folder_name}</b></p><p className="mt-0.5 truncate font-mono text-[11px]">{driveRoot.root_folder_id}</p></div>
+                          {driveRoot.root_folder_link && <a href={driveRoot.root_folder_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1 text-blue-600 hover:bg-blue-50">Open<ExternalLink size={11}/></a>}
+                        </div>
+                      ) : driveConnected ? <span>No Drive folder selected.</span> : <span>Connect Google Drive in Settings first.</span>}
+                    </div>
+                    <div className="grid gap-2">
+                      <select value={driveMode} onChange={e=>setDriveMode(e.target.value as "default"|"existing"|"new")} disabled={!driveConnected} className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
+                        <option value="default">Use ResearchBuddy / project name</option>
+                        <option value="existing">Use an existing Drive folder</option>
+                        <option value="new">Create a new Drive folder</option>
+                      </select>
+                      {driveMode==="existing"&&<input value={folderUrl} onChange={e=>setFolderUrl(e.target.value)} placeholder="Drive folder URL or id" disabled={!driveConnected} className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50"/>}
+                      {driveMode==="new"&&<div className="grid gap-2 sm:grid-cols-2"><input value={folderName} onChange={e=>setFolderName(e.target.value)} placeholder="Folder name" disabled={!driveConnected} className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50"/><input value={parentFolderUrl} onChange={e=>setParentFolderUrl(e.target.value)} placeholder="Optional parent folder URL" disabled={!driveConnected} className="rounded-lg border px-3 py-2 text-sm disabled:bg-gray-50"/></div>}
+                      <div className="flex flex-wrap gap-2">
+                        <button type="button" onClick={saveDriveRoot} disabled={!driveConnected||settingsBusy==="drive"} className="rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50">{settingsBusy==="drive"?"Saving…":"Save Drive folder"}</button>
+                        <select value={syncScope} onChange={e=>setSyncScope(e.target.value as "all"|"docs"|"meetings")} className="rounded-lg border px-2 py-2 text-xs text-gray-600"><option value="all">Docs and meetings</option><option value="docs">Docs only</option><option value="meetings">Meetings only</option></select>
+                        <select value={syncMode} onChange={e=>setSyncMode(e.target.value as "mapped"|"new")} className="rounded-lg border px-2 py-2 text-xs text-gray-600"><option value="mapped">Update mapped</option><option value="new">Create new</option></select>
+                        <button type="button" onClick={syncProjectDrive} disabled={!driveConnected||settingsBusy==="sync"} className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"><RefreshCw size={13}/>{settingsBusy==="sync"?"Syncing…":"Sync"}</button>
+                      </div>
+                      {syncResult&&<p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">Synced to {syncResult.root.root_folder_name}. Docs: {syncResult.docs?.synced??0}; Meetings: {syncResult.meetings?.synced??0}.</p>}
+                    </div>
+                  </section>
+
+                  <div className="border-t" />
+
+                  {/* Zotero */}
+                  <form onSubmit={saveZotero} className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Database size={15} className="text-gray-500"/>
+                      <div>
+                        <p className="text-sm font-medium">Zotero</p>
+                        <p className="text-xs text-gray-400">Project library used by Papers for syncing citations.</p>
+                      </div>
+                    </div>
+                    <div className="grid gap-2">
+                      <input value={zoteroConfig.api_key} onChange={e=>setZoteroConfig({...zoteroConfig,api_key:e.target.value})} placeholder={zoteroConfig.api_key_set?"API key already saved — leave blank to keep it.":"Zotero API key"} className="rounded-lg border px-3 py-2 text-sm"/>
+                      <div className="grid gap-2 sm:grid-cols-[1fr_130px]">
+                        <input value={zoteroConfig.library_id} onChange={e=>setZoteroConfig({...zoteroConfig,library_id:e.target.value})} placeholder="Library ID" className="rounded-lg border px-3 py-2 text-sm"/>
+                        <select value={zoteroConfig.library_type} onChange={e=>setZoteroConfig({...zoteroConfig,library_type:e.target.value as "user"|"group"})} className="rounded-lg border px-3 py-2 text-sm text-gray-700"><option value="user">User</option><option value="group">Group</option></select>
+                      </div>
+                      <button disabled={settingsBusy==="zotero"} className="w-fit rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">{settingsBusy==="zotero"?"Saving…":"Save Zotero"}</button>
+                    </div>
+                  </form>
+
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
       </div>
-    </div>
+    </>
   )
 }
