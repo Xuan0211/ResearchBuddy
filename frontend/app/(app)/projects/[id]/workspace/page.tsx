@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import {
   AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Clock,
-  Copy, FileJson, FolderGit2, FolderOpen, RefreshCw, RotateCcw,
+  Copy, FolderGit2, FolderOpen, RefreshCw, RotateCcw,
   Terminal, UploadCloud,
 } from "lucide-react"
 import { api } from "@/lib/api"
@@ -60,9 +60,9 @@ function countTree(node: DirNode): number {
 }
 
 function TreeDir({
-  name, node, depth = 0, defaultOpen = false,
+  name, node, depth = 0, defaultOpen = false, description,
 }: {
-  name: string; node: DirNode; depth?: number; defaultOpen?: boolean
+  name: string; node: DirNode; depth?: number; defaultOpen?: boolean; description?: string
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const count = countTree(node)
@@ -78,8 +78,13 @@ function TreeDir({
       >
         {open ? <ChevronDown size={12} className="text-gray-400 shrink-0" /> : <ChevronRight size={12} className="text-gray-400 shrink-0" />}
         <FolderOpen size={13} className="text-amber-400 shrink-0" />
-        <span className="text-xs font-medium text-gray-800">{name}/</span>
-        <span className="ml-auto text-[10px] text-gray-400 pr-2">{count}</span>
+        <div className="min-w-0 flex-1">
+          <span className="text-xs font-medium text-gray-800">{name}/</span>
+          {depth === 0 && description && (
+            <span className="ml-2 text-[10px] text-gray-400">{description}</span>
+          )}
+        </div>
+        <span className="shrink-0 text-[10px] text-gray-400 pr-2">{count}</span>
       </button>
       {open && (
         <div>
@@ -189,9 +194,6 @@ export default function WorkspacePage() {
   if (!data) return <div className="p-8 text-sm text-red-500">Workspace not found</div>
 
   const { workspace } = data
-  const editable = workspace.manifest.agent_contract.editable
-  const systemOwned = workspace.manifest.agent_contract.system_owned
-
   return (
     <div className="h-full overflow-y-auto bg-white">
       <div className="max-w-5xl mx-auto px-6 py-6 space-y-5">
@@ -241,12 +243,12 @@ export default function WorkspacePage() {
           <div className="border-b px-4 py-3 flex items-center gap-2 text-sm font-medium">
             <Terminal size={14} /> Git access
           </div>
-          <div className="p-4 grid gap-4 md:grid-cols-2">
+          <div className="p-4 space-y-4">
 
             {/* clone */}
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Clone</span>
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">1 · Clone</span>
                 <button onClick={() => copy(cloneCmd, "clone")}
                   className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-black">
                   <Copy size={11} /> {copied === "clone" ? "copied" : "copy"}
@@ -257,17 +259,27 @@ export default function WorkspacePage() {
               </code>
             </div>
 
-            {/* push */}
-            <div className="space-y-2">
+            {/* push — step 1: navigate */}
+            <div className="space-y-1.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-medium text-gray-600 uppercase tracking-wide">Push changes</span>
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">2 · Enter the folder</span>
+              </div>
+              <code className="block rounded bg-gray-950 px-3 py-2 text-xs text-gray-100 whitespace-pre overflow-x-auto">
+                {`cd ${projectSlug}`}
+              </code>
+            </div>
+
+            {/* push — step 2: git ops */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-medium text-gray-500 uppercase tracking-wide">3 · Commit &amp; push</span>
                 <button onClick={() => copy(pushCmds, "push")}
                   className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-black">
                   <Copy size={11} /> {copied === "push" ? "copied" : "copy"}
                 </button>
               </div>
               <code className="block rounded bg-gray-950 px-3 py-2 text-xs text-gray-100 whitespace-pre overflow-x-auto">
-                {pushCmds}
+                {`git add .\ngit commit -m "Your message"\ngit push`}
               </code>
             </div>
 
@@ -297,7 +309,10 @@ export default function WorkspacePage() {
               {Object.entries(tree.dirs)
                 .sort(([a], [b]) => a.localeCompare(b))
                 .map(([name, node]) => (
-                  <TreeDir key={name} name={name} node={node} defaultOpen={false} />
+                  <TreeDir
+                    key={name} name={name} node={node} defaultOpen={false}
+                    description={workspace.manifest.folders[name]}
+                  />
                 ))}
               {tree.files.map(f => (
                 <div key={f} className="py-0.5 pl-4 text-xs text-gray-500">{f}</div>
@@ -357,62 +372,6 @@ export default function WorkspacePage() {
             </div>
           )}
         </div>
-
-        {/* ── editable folders ── */}
-        <section>
-          <h2 className="text-sm font-semibold mb-3">Editable Folders</h2>
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {editable.map(folder => (
-              <div key={folder} className="rounded-md border p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <code className="text-sm font-medium">{folder}/</code>
-                  <span className="text-xs text-gray-400">{workspace.counts[folder] ?? 0} files</span>
-                </div>
-                <p className="mt-1 text-xs text-gray-500">{workspace.manifest.folders[folder]}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        {/* ── system files + indexed items ── */}
-        <section className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
-          <div className="rounded-md border">
-            <div className="border-b px-4 py-3 flex items-center gap-2 text-sm font-medium">
-              <FileJson size={14} /> System files
-            </div>
-            <div className="p-4 space-y-2 text-sm">
-              <div className="flex justify-between gap-3">
-                <span className="text-gray-500">Manifest</span>
-                <code className="text-xs">{data.manifest_path}</code>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-gray-500">Index</span>
-                <code className="text-xs">{data.index_path}</code>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-gray-500">System owned</span>
-                <code className="text-xs">{systemOwned.join(", ")}</code>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-md border">
-            <div className="border-b px-4 py-3 text-sm font-medium">Indexed Items</div>
-            <div className="max-h-64 overflow-y-auto divide-y">
-              {workspace.items.length === 0 ? (
-                <p className="p-4 text-sm text-gray-500">No indexed Markdown items yet.</p>
-              ) : workspace.items.slice(0, 30).map(item => (
-                <div key={item.path} className="px-4 py-2.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-sm font-medium truncate">{item.title}</p>
-                    <span className="text-[10px] uppercase tracking-wide text-gray-400 shrink-0">{item.type}</span>
-                  </div>
-                  <code className="mt-0.5 block text-xs text-gray-400 truncate">{item.path}</code>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
 
       </div>
     </div>

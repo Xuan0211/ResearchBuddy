@@ -462,25 +462,25 @@ export default function HomePage() {
       <div className="h-full overflow-y-auto bg-gray-50">
 
         {/* ── 1. Project name banner ── */}
-        <div className="bg-white border-b px-6 py-8">
-          <div className="max-w-5xl mx-auto">
+        <div className="px-6 pt-10 pb-6">
+          <div className="max-w-5xl mx-auto flex flex-col items-center">
             {editingName ? (
-              <form onSubmit={saveName} className="flex items-center gap-3">
+              <form onSubmit={saveName} className="flex items-center gap-3 w-full max-w-xl">
                 <input autoFocus value={nameInput} onChange={e => setNameInput(e.target.value)}
-                  className="min-w-0 flex-1 rounded-xl border border-gray-300 px-4 py-2 text-4xl font-bold focus:outline-none focus:ring-2 focus:ring-black sm:text-5xl"
+                  className="min-w-0 flex-1 rounded-xl border border-gray-300 px-4 py-2 text-4xl font-bold text-center focus:outline-none focus:ring-2 focus:ring-black sm:text-5xl"
                 />
                 <button type="submit" disabled={nameBusy}
-                  className="flex h-11 w-11 items-center justify-center rounded-full bg-black text-white shadow hover:bg-gray-800 disabled:opacity-50">
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-black text-white shadow hover:bg-gray-800 disabled:opacity-50">
                   <Check size={18} />
                 </button>
                 <button type="button" onClick={() => { setEditingName(false); setNameInput(project?.name || "") }}
-                  className="flex h-11 w-11 items-center justify-center rounded-full border text-gray-500 hover:bg-gray-50">
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-gray-500 hover:bg-gray-50">
                   <X size={18} />
                 </button>
               </form>
             ) : (
-              <div className="flex items-center gap-4 group">
-                <h1 className="text-4xl font-bold text-gray-900 sm:text-5xl leading-tight">
+              <div className="flex items-center gap-3 group">
+                <h1 className="text-4xl font-bold text-gray-900 sm:text-5xl leading-tight text-center">
                   {project?.name}
                 </h1>
                 {isAdmin && (
@@ -497,7 +497,7 @@ export default function HomePage() {
 
         {/* ── 2. Countdown ── */}
         <div
-          className="bg-white border-b relative"
+          className="relative"
           onClick={() => { if (canEdit && !editingCountdown) { setEditingCountdown(true); setCountdownForm(homeSettings) } }}
           style={{ cursor: canEdit && !editingCountdown ? "pointer" : "default" }}
         >
