@@ -415,7 +415,7 @@ export default function GlobalSkillsPage() {
           statuses={importStatuses}
           currentProjectId={currentProject?.id ?? null}
           onImport={handleImport}
-          onSync={(projectId) => {
+          onSync={async (projectId) => {
             const s = importStatuses.find(s => s.project_id === projectId)
             requestSync(importSkill.id, projectId, s?.project_name ?? projectId)
           }}
