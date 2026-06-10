@@ -3,7 +3,7 @@ import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
-  AtSign, CalendarClock, Check, CheckSquare, ChevronDown, ChevronRight, Crown,
+  AtSign, CalendarClock, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, Crown,
   Database, ExternalLink, FileText, Folder, GripVertical, Mail, Pencil, Plus,
   RefreshCw, Shield, Square, Trash2, UserPlus, X,
 } from "lucide-react"
@@ -25,8 +25,8 @@ interface DriveRootResponse { configured: boolean; settings_path: string; root_f
 interface BatchDriveSyncResponse { ok: boolean; root: { root_folder_name: string; root_folder_link: string }; docs?: { synced: number; failed?: number } | null; meetings?: { synced: number; failed?: number } | null }
 interface ZoteroConfig { api_key: string; library_id: string; library_type: "user" | "group"; api_key_set?: boolean }
 interface HomeSettings { countdown_title: string; countdown_target: string }
-interface TodoItem { id: string; text: string; mentions: string[]; doc_ids: string[]; completed: boolean; order: number; is_mine?: boolean }
-interface TodoList { id: string; title: string; week_start: string; meeting_id?: string; doc_ids?: string[]; due_at?: string; order: number; items: TodoItem[]; is_mine?: boolean }
+interface TodoItem { id: string; text: string; mentions: string[]; doc_ids: string[]; completed: boolean; order: number; is_mine?: boolean; due_at?: string }
+interface TodoList { id: string; title: string; week_start: string; meeting_id?: string; doc_ids?: string[]; due_at?: string; order: number; items: TodoItem[]; is_mine?: boolean; created_at?: string }
 interface TodoItemForm { text: string; mentions: string[]; doc_ids: string[] }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -220,9 +220,11 @@ export default function HomePage() {
   const [newListTitle, setNewListTitle] = useState("")
   const [newListMeetingId, setNewListMeetingId] = useState("")
   const [newListDueAt, setNewListDueAt] = useState("")
+  const [activeListIdx, setActiveListIdx] = useState(0)
   const [dragListId, setDragListId] = useState<string | null>(null)
   const [dragItem, setDragItem] = useState<{ listId: string; itemId: string } | null>(null)
   const [itemForms, setItemForms] = useState<Record<string, TodoItemForm>>({})
+  const [newItemDueForms, setNewItemDueForms] = useState<Record<string, string>>({})
   const [peoplePickerListId, setPeoplePickerListId] = useState<string | null>(null)
   const [docPickerListId, setDocPickerListId] = useState<string | null>(null)
   const [todoDocQuery, setTodoDocQuery] = useState("")
@@ -442,18 +444,24 @@ export default function HomePage() {
     setNewListMeetingId("")
     setNewListDueAt("")
     setListFormOpen(false)
+    setActiveListIdx(0)
   }
 
   async function createTodoItem(listId: string, e: React.FormEvent) {
     e.preventDefault()
     const form = itemForms[listId] ?? blankItemForm
+    // Auto-extract @mentions embedded in text
+    const textMentions = (form.text.match(/@([\w.-]+)/g) || []).map(m => m.slice(1))
+    const allMentions = [...new Set([...form.mentions, ...textMentions])]
     const item = await api.post<TodoItem>(`/api/projects/${projectId}/todos/${listId}/items`, {
       text: form.text,
-      mentions: form.mentions,
+      mentions: allMentions,
       doc_ids: form.doc_ids,
+      due_at: newItemDueForms[listId] || "",
     })
     setTodoLists(prev => prev.map(list => list.id === listId ? { ...list, items: [...list.items, item], is_mine: list.is_mine || item.is_mine } : list))
     setItemForms(prev => ({ ...prev, [listId]: blankItemForm }))
+    setNewItemDueForms(prev => ({ ...prev, [listId]: "" }))
   }
 
   async function patchTodoList(listId: string, patch: Partial<TodoList>) {
@@ -596,6 +604,44 @@ export default function HomePage() {
     const sel=!!timelineEditor?.doc_ids.includes(node.doc!.id)
     return <button key={node.path} type="button" onClick={()=>addEditorDoc(node.doc!.id)} disabled={sel} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45" style={{paddingLeft:6+depth*14}}><span className="min-w-0 truncate text-gray-700">{node.name}</span><span className="shrink-0 text-[10px] text-gray-400">{sel?"Added":"Add"}</span></button>
   }
+
+  // ── Inline text renderer (parses @handle and {{doc title}} tokens) ───────────
+  function renderItemText(text: string): React.ReactNode {
+    if (!text) return null
+    const parts: React.ReactNode[] = []
+    const regex = /(@[\w.-]+|\{\{[^{}]+\}\})/g
+    let lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index))
+      const token = match[0]
+      const key = match.index
+      if (token.startsWith("@")) {
+        const handle = token.slice(1)
+        const p = personByValue.get(handle) || personByValue.get(handle.toLowerCase())
+        parts.push(<span key={key} className="inline-flex items-center rounded-full bg-gray-100 px-1.5 text-[10px] font-medium text-gray-600 mx-0.5 align-middle">@{p?.label || handle}</span>)
+      } else {
+        const title = token.slice(2, -2)
+        const doc = [...docById.values()].find(d => d.title === title)
+        parts.push(doc
+          ? <button key={key} type="button" onClick={() => doc.meetingId ? router.push(`/projects/${projectId}/meetings/${doc.meetingId}`) : router.push(`/projects/${projectId}/docs/${doc.id}`)} className="inline-flex items-center rounded-full bg-emerald-50 px-1.5 text-[10px] font-medium text-emerald-700 mx-0.5 align-middle hover:bg-emerald-100">{title}</button>
+          : <span key={key} className="inline-flex items-center rounded-full bg-gray-100 px-1.5 text-[10px] font-medium text-gray-400 mx-0.5 align-middle">{title}</span>
+        )
+      }
+      lastIndex = match.index + token.length
+    }
+    if (lastIndex < text.length) parts.push(text.slice(lastIndex))
+    return parts.length === 1 && typeof parts[0] === "string" ? parts[0] : <>{parts}</>
+  }
+
+  // ── Derived TODO lists ────────────────────────────────────────────────────────
+  const weekLists = todoLists
+    .filter(l => l.week_start === todoWeek)
+    .sort((a, b) => (b.created_at || "").localeCompare(a.created_at || "") || b.order - a.order)
+  const pastLists = todoLists
+    .filter(l => l.week_start !== todoWeek)
+    .sort((a, b) => (b.week_start || "").localeCompare(a.week_start || ""))
+  const safeIdx = weekLists.length > 0 ? Math.min(activeListIdx, weekLists.length - 1) : 0
 
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading…</div>
 
@@ -856,114 +902,214 @@ export default function HomePage() {
 
           {/* ── 4. TODO ── */}
           <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+            {/* Header */}
             <div className="border-b px-5 py-3 flex items-center justify-between">
-              <div>
+              <div className="flex items-center gap-3">
                 <h3 className="font-semibold text-sm">TODO</h3>
-                <p className="mt-0.5 text-xs text-gray-400">{todoHistoryOpen ? "All lists" : `Week of ${todoWeek}`}</p>
+                {weekLists.length > 1 && (
+                  <div className="flex items-center gap-0.5">
+                    <button onClick={() => setActiveListIdx(i => Math.min(i + 1, weekLists.length - 1))} disabled={activeListIdx >= weekLists.length - 1} className="rounded p-0.5 text-gray-400 hover:text-black disabled:opacity-25"><ChevronLeft size={14}/></button>
+                    <span className="text-[11px] text-gray-400 tabular-nums w-8 text-center">{weekLists.length - safeIdx}/{weekLists.length}</span>
+                    <button onClick={() => setActiveListIdx(i => Math.max(i - 1, 0))} disabled={activeListIdx <= 0} className="rounded p-0.5 text-gray-400 hover:text-black disabled:opacity-25"><ChevronRight size={14}/></button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={async()=>{ const next=!todoHistoryOpen; setTodoHistoryOpen(next); await loadTodos(todoWeek,next) }} className="rounded-lg border px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50">
-                  {todoHistoryOpen ? "This week" : "History"}
+                <button onClick={async () => { const next = !todoHistoryOpen; setTodoHistoryOpen(next); await loadTodos(todoWeek, next) }} className="rounded-lg border px-2.5 py-1.5 text-xs text-gray-500 hover:bg-gray-50">
+                  {todoHistoryOpen ? "Current week" : "History"}
                 </button>
-                {canEdit && <button onClick={()=>setListFormOpen(v=>!v)} className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-1.5 text-xs text-white"><Plus size={12}/>New list</button>}
+                {canEdit && <button onClick={() => setListFormOpen(v => !v)} className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-1.5 text-xs text-white"><Plus size={12}/> New</button>}
               </div>
             </div>
+
+            {/* New list form */}
             {listFormOpen && canEdit && (
-              <form onSubmit={createTodoList} className="grid gap-2 border-b bg-gray-50 px-4 py-3 md:grid-cols-[1fr_180px_180px_auto_auto]">
-                <input autoFocus required value={newListTitle} onChange={e=>setNewListTitle(e.target.value)} placeholder="List title, e.g. This week's writing tasks" className="min-w-0 rounded-lg border px-2 py-1.5 text-sm outline-none"/>
-                <select value={newListMeetingId} onChange={e=>setNewListMeetingId(e.target.value)} className="rounded-lg border px-2 py-1.5 text-xs text-gray-600 outline-none">
-                  <option value="">Bind meeting</option>
-                  {meetings.map(m=><option key={m.id} value={m.id}>{m.date} · {m.title}</option>)}
+              <form onSubmit={createTodoList} className="flex flex-wrap gap-2 border-b bg-gray-50 px-4 py-3">
+                <input autoFocus required value={newListTitle} onChange={e => setNewListTitle(e.target.value)} placeholder="List title" className="min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-black"/>
+                <select value={newListMeetingId} onChange={e => setNewListMeetingId(e.target.value)} className="rounded-lg border px-2 py-1.5 text-xs text-gray-600 outline-none">
+                  <option value="">No meeting</option>
+                  {meetings.map(m => <option key={m.id} value={m.id}>{m.date} · {m.title}</option>)}
                 </select>
-                <input type="datetime-local" value={newListDueAt} onChange={e=>setNewListDueAt(e.target.value)} className="rounded-lg border px-2 py-1.5 text-xs outline-none"/>
-                <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Add list</button>
-                <button type="button" onClick={()=>setListFormOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs text-gray-600">Cancel</button>
+                <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Create</button>
+                <button type="button" onClick={() => setListFormOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs text-gray-500">Cancel</button>
               </form>
             )}
-            <div className="grid gap-3 p-4 lg:grid-cols-2">
-              {todoLists.length === 0 ? (
-                <p className="text-sm text-gray-400 lg:col-span-2">No TODO lists yet.</p>
-              ) : todoLists.map(list => {
-                const boundMeeting = list.meeting_id ? meetings.find(m => m.id === list.meeting_id) : null
-                const listDocs = (list.doc_ids || []).map(id=>docById.get(id)).filter(Boolean) as DocOption[]
-                const form = itemForms[list.id] ?? blankItemForm
-                const filteredTodoDocs = (todoDocQuery.trim()?docOptions.filter(d=>d.search.includes(todoDocQuery.trim().toLowerCase()) || d.title.toLowerCase().includes(todoDocQuery.trim().toLowerCase())):docOptions).slice(0,10)
-                return (
-                  <div key={list.id} draggable={canEdit} onDragStart={()=>setDragListId(list.id)} onDragOver={e=>e.preventDefault()} onDrop={()=>reorderTodoList(list.id)}
-                    className={`rounded-lg border shadow-sm ${list.is_mine ? "border-red-300 bg-red-50" : "bg-white"}`}>
-                    <div className="flex items-start justify-between gap-2 border-b px-3 py-2">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-gray-900">{list.title}</p>
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">{list.week_start}</span>
-                          {boundMeeting && <button onClick={()=>router.push(`/projects/${projectId}/meetings/${boundMeeting.id}`)} className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">{boundMeeting.title}</button>}
-                          {list.due_at && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">{daysUntil(list.due_at)}</span>}
-                          {listDocs.map(d=><button key={d.id} onClick={()=>d.meetingId?router.push(`/projects/${projectId}/meetings/${d.meetingId}`):router.push(`/projects/${projectId}/docs/${d.id}`)} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}</button>)}
+
+            {/* Stacked card */}
+            {weekLists.length === 0 ? (
+              <p className="px-5 py-10 text-center text-sm text-gray-400">
+                {canEdit ? "No lists for this week." : "No TODO lists for this week."}
+              </p>
+            ) : (() => {
+              const list = weekLists[safeIdx]
+              const boundMeeting = list.meeting_id ? meetings.find(m => m.id === list.meeting_id) : null
+              const form = itemForms[list.id] ?? blankItemForm
+              const filteredTodoDocs = (todoDocQuery.trim() ? docOptions.filter(d => d.search.includes(todoDocQuery.trim().toLowerCase()) || d.title.toLowerCase().includes(todoDocQuery.trim().toLowerCase())) : docOptions).slice(0, 12)
+              return (
+                <div className="relative px-4 pt-4 pb-8">
+                  {/* Ghost cards for stack depth */}
+                  {safeIdx + 2 < weekLists.length && <div className="pointer-events-none absolute inset-x-8 top-8 bottom-1 rounded-xl border border-gray-100 bg-gray-100"/>}
+                  {safeIdx + 1 < weekLists.length && <div className="pointer-events-none absolute inset-x-4 top-6 bottom-0 rounded-xl border border-gray-100 bg-white shadow-sm"/>}
+                  {/* Active card */}
+                  <div className="relative z-10 rounded-xl border bg-white shadow-sm">
+                    {/* Card header */}
+                    <div className="flex items-start justify-between gap-2 border-b px-4 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-gray-900">{list.title}</p>
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {boundMeeting && <button onClick={() => router.push(`/projects/${projectId}/meetings/${boundMeeting.id}`)} className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{boundMeeting.title}</button>}
+                          {list.due_at && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">{daysUntil(list.due_at)}</span>}
                         </div>
                       </div>
-                      {canEdit && <div className="flex items-center gap-1 text-gray-300">
-                        <select value={list.meeting_id || ""} onChange={e=>patchTodoList(list.id,{meeting_id:e.target.value})} className="max-w-28 rounded border px-1 py-0.5 text-[10px] text-gray-500">
-                          <option value="">Meeting</option>
-                          {meetings.map(m=><option key={m.id} value={m.id}>{m.title}</option>)}
-                        </select>
-                        <input type="datetime-local" value={list.due_at || ""} onChange={e=>patchTodoList(list.id,{due_at:e.target.value})} className="w-32 rounded border px-1 py-0.5 text-[10px] text-gray-500"/>
-                        <GripVertical size={14}/><button onClick={()=>deleteTodoList(list.id)} className="hover:text-red-500"><Trash2 size={13}/></button>
-                      </div>}
+                      {canEdit && (
+                        <div className="flex items-center gap-1 text-gray-300 shrink-0">
+                          <select value={list.meeting_id || ""} onChange={e => patchTodoList(list.id, { meeting_id: e.target.value })} className="max-w-28 rounded border px-1 py-0.5 text-[10px] text-gray-500 outline-none">
+                            <option value="">Meeting</option>
+                            {meetings.map(m => <option key={m.id} value={m.id}>{m.title}</option>)}
+                          </select>
+                          <input type="datetime-local" value={list.due_at || ""} onChange={e => patchTodoList(list.id, { due_at: e.target.value })} className="w-28 rounded border px-1 py-0.5 text-[10px] text-gray-500 outline-none"/>
+                          <button onClick={() => { deleteTodoList(list.id); setActiveListIdx(i => Math.max(0, i - 1)) }} className="hover:text-red-500"><Trash2 size={13}/></button>
+                        </div>
+                      )}
                     </div>
+                    {/* Items */}
                     <div className="divide-y">
-                      {list.items.length === 0 ? (
-                        <p className="px-3 py-3 text-xs text-gray-400">No items yet.</p>
-                      ) : list.items.map(item => {
-                        const attachedDocs = item.doc_ids.map(id=>docById.get(id)).filter(Boolean) as DocOption[]
+                      {list.items.length === 0 && <p className="px-4 py-3 text-xs text-gray-400">No items. Add one below.</p>}
+                      {list.items.map(item => {
+                        const embeddedMentions = new Set((item.text.match(/@([\w.-]+)/g) || []).map(m => m.slice(1).toLowerCase()))
+                        const embeddedTitles = new Set((item.text.match(/\{\{([^{}]+)\}\}/g) || []).map(m => m.slice(2, -2)))
+                        const extraMentions = item.mentions.filter(m => !embeddedMentions.has(m.replace(/^@/, "").toLowerCase()))
+                        const extraDocs = item.doc_ids.filter(id => { const d = docById.get(id); return d && !embeddedTitles.has(d.title) })
                         return (
-                          <div key={item.id} draggable={canEdit} onDragStart={()=>setDragItem({ listId:list.id, itemId:item.id })} onDragOver={e=>e.preventDefault()} onDrop={()=>reorderTodoItem(list.id,item.id)}
-                            className={`flex items-start gap-2 px-3 py-2 ${item.is_mine ? "bg-red-50 text-red-700" : ""}`}>
-                            <button onClick={()=>patchTodoItem(list.id,item.id,{completed:!item.completed})} className="mt-0.5 text-gray-500 hover:text-black">{item.completed?<CheckSquare size={15}/>:<Square size={15}/>}</button>
+                          <div key={item.id} draggable={canEdit} onDragStart={() => setDragItem({ listId: list.id, itemId: item.id })} onDragOver={e => e.preventDefault()} onDrop={() => reorderTodoItem(list.id, item.id)}
+                            className={`group flex items-start gap-2 px-4 py-2.5 ${item.is_mine ? "bg-red-50" : ""}`}>
+                            <button onClick={() => patchTodoItem(list.id, item.id, { completed: !item.completed })} className="mt-0.5 shrink-0 text-gray-400 hover:text-black">
+                              {item.completed ? <CheckSquare size={14}/> : <Square size={14}/>}
+                            </button>
                             <div className="min-w-0 flex-1">
-                              <p className={`text-sm ${item.completed ? "line-through text-gray-400" : ""}`}>{item.text}</p>
-                              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                                {item.mentions.map(m=><span key={m} className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">@{m}</span>)}
-                                {attachedDocs.map(d=><button key={d.id} onClick={()=>d.meetingId?router.push(`/projects/${projectId}/meetings/${d.meetingId}`):router.push(`/projects/${projectId}/docs/${d.id}`)} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}</button>)}
+                              <div className={`text-sm leading-snug ${item.completed ? "line-through text-gray-400" : "text-gray-800"}`}>
+                                {renderItemText(item.text)}
                               </div>
+                              {(extraMentions.length > 0 || extraDocs.length > 0) && (
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {extraMentions.map(m => <span key={m} className="rounded-full bg-gray-100 px-1.5 py-0 text-[10px] text-gray-600">@{m}</span>)}
+                                  {extraDocs.map(id => { const d = docById.get(id); return d ? <button key={id} onClick={() => d.meetingId ? router.push(`/projects/${projectId}/meetings/${d.meetingId}`) : router.push(`/projects/${projectId}/docs/${d.id}`)} className="rounded-full bg-emerald-50 px-1.5 py-0 text-[10px] text-emerald-700">{docDisplay(d)}</button> : null })}
+                                </div>
+                              )}
+                              {item.due_at && <p className="mt-0.5 text-[10px] text-amber-600">{daysUntil(item.due_at)}</p>}
                             </div>
-                            {canEdit && <div className="flex items-center gap-1 text-gray-300"><GripVertical size={14}/><button onClick={()=>deleteTodoItem(list.id,item.id)} className="hover:text-red-500"><Trash2 size={13}/></button></div>}
+                            {canEdit && (
+                              <div className="flex shrink-0 items-center gap-1 text-gray-300">
+                                <input type="date" value={(item.due_at || "").split("T")[0]} onChange={e => patchTodoItem(list.id, item.id, { due_at: e.target.value })}
+                                  title="Due date" className="w-0 overflow-hidden rounded border px-1 py-0.5 text-[10px] text-gray-400 outline-none opacity-0 transition-all group-hover:w-24 group-hover:opacity-100"/>
+                                <GripVertical size={13}/>
+                                <button onClick={() => deleteTodoItem(list.id, item.id)} className="hover:text-red-500"><Trash2 size={12}/></button>
+                              </div>
+                            )}
                           </div>
                         )
                       })}
                     </div>
+                    {/* Add item */}
                     {canEdit && (
-                      <form onSubmit={e=>createTodoItem(list.id,e)} className="border-t bg-gray-50 px-3 py-3">
+                      <form onSubmit={e => createTodoItem(list.id, e)} className="border-t bg-gray-50 px-3 py-2.5">
                         <div className="flex items-center gap-1 rounded-lg border bg-white px-1.5 py-1">
-                          <button type="button" onClick={()=>setPeoplePickerListId(peoplePickerListId===list.id?null:list.id)} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Mention people"><AtSign size={14}/></button>
-                          <button type="button" onClick={()=>setDocPickerListId(docPickerListId===list.id?null:list.id)} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Reference document"><FileText size={14}/></button>
-                          <input required value={form.text} onChange={e=>{ updateItemForm(list.id,{text:e.target.value}); if(e.target.value.includes("{{")) setDocPickerListId(list.id) }} placeholder="Add item. Type {{ to reference docs or meeting docs" className="min-w-0 flex-1 px-1 py-1 text-xs outline-none"/>
+                          <button type="button"
+                            onClick={() => { updateItemForm(list.id, { text: form.text + "@" }); setPeoplePickerListId(list.id) }}
+                            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Mention (@)"><AtSign size={13}/></button>
+                          <button type="button"
+                            onClick={() => { updateItemForm(list.id, { text: form.text + "{{" }); setDocPickerListId(list.id) }}
+                            className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Reference doc ({{}})"><FileText size={13}/></button>
+                          <input required value={form.text}
+                            onChange={e => {
+                              const val = e.target.value
+                              updateItemForm(list.id, { text: val })
+                              if (/@[\w.-]*$/.test(val)) setPeoplePickerListId(list.id)
+                              else if (val.endsWith("{{")) setDocPickerListId(list.id)
+                              else if (peoplePickerListId === list.id && !/@/.test(val)) setPeoplePickerListId(null)
+                            }}
+                            placeholder="Add item… type @ or {{ to insert refs"
+                            className="min-w-0 flex-1 px-1 py-1 text-xs outline-none"
+                          />
+                          <input type="date" value={newItemDueForms[list.id] || ""} onChange={e => setNewItemDueForms(prev => ({ ...prev, [list.id]: e.target.value }))}
+                            title="Item due date" className="w-24 rounded border px-1 py-0.5 text-[10px] text-gray-400 outline-none"/>
                           <button type="submit" className="rounded-md bg-black px-2.5 py-1 text-xs text-white">Add</button>
                         </div>
-                        {(form.mentions.length > 0 || form.doc_ids.length > 0) && (
-                          <div className="mt-2 flex flex-wrap gap-1.5">
-                            {form.mentions.map(v=>{const p=personByValue.get(v)||personByValue.get(v.trim().toLowerCase());return <span key={v} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">@{p?.label||v}<button type="button" onClick={()=>toggleTodoPerson(list.id,v)} className="text-gray-400 hover:text-black"><X size={9}/></button></span>})}
-                            {form.doc_ids.map(id=>{const d=docById.get(id); return d ? <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}<button type="button" onClick={()=>updateItemForm(list.id,{doc_ids:form.doc_ids.filter(x=>x!==id)})} className="text-emerald-400 hover:text-emerald-700"><X size={9}/></button></span> : null})}
-                          </div>
-                        )}
                         {peoplePickerListId === list.id && (
-                          <div className="mt-2 max-h-28 overflow-auto rounded-lg border bg-white p-1">
-                            {peopleOptions.map(p=><button key={p.value} type="button" onClick={()=>toggleTodoPerson(list.id,p.value)} className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-gray-50"><span className="truncate">{p.label}</span><span className="text-[10px] text-gray-400">{form.mentions.includes(p.value)?"Added":"Add"}</span></button>)}
+                          <div className="mt-2 max-h-32 overflow-auto rounded-lg border bg-white shadow-sm">
+                            {peopleOptions.length === 0
+                              ? <p className="px-3 py-2 text-xs text-gray-400">No contacts yet.</p>
+                              : peopleOptions.map(p => (
+                                <button key={p.value} type="button"
+                                  onClick={() => {
+                                    const cur = (itemForms[list.id] ?? blankItemForm).text
+                                    const curMentions = (itemForms[list.id] ?? blankItemForm).mentions
+                                    updateItemForm(list.id, {
+                                      text: cur.replace(/@[\w.-]*$/, "") + `@${p.value.replace(/^@/, "")} `,
+                                      mentions: curMentions.includes(p.value) ? curMentions : [...curMentions, p.value],
+                                    })
+                                    setPeoplePickerListId(null)
+                                  }}
+                                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-gray-50">
+                                  <span className="truncate">{p.label}</span>
+                                </button>
+                              ))
+                            }
                           </div>
                         )}
                         {docPickerListId === list.id && (
-                          <div className="mt-2 rounded-lg border bg-white">
-                            <div className="border-b px-2 py-1"><input value={todoDocQuery} onChange={e=>setTodoDocQuery(e.target.value)} placeholder="Search docs" className="w-full text-xs outline-none"/></div>
+                          <div className="mt-2 rounded-lg border bg-white shadow-sm">
+                            <div className="border-b px-2 py-1.5">
+                              <input value={todoDocQuery} onChange={e => setTodoDocQuery(e.target.value)} placeholder="Search docs…" className="w-full text-xs outline-none"/>
+                            </div>
                             <div className="max-h-36 overflow-auto p-1">
-                              {filteredTodoDocs.map(d=><button key={d.id} type="button" onClick={()=>insertTodoDoc(list.id,d)} className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-gray-50"><span className="min-w-0 truncate">{docDisplay(d)}</span><span className="shrink-0 text-[10px] text-gray-400">{d.source==="meeting"?"Meeting":"Doc"}</span></button>)}
+                              {filteredTodoDocs.length === 0 && <p className="px-2 py-2 text-xs text-gray-400">No docs found.</p>}
+                              {filteredTodoDocs.map(d => (
+                                <button key={d.id} type="button" onClick={() => insertTodoDoc(list.id, d)}
+                                  className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-gray-50">
+                                  <span className="min-w-0 truncate">{docDisplay(d)}</span>
+                                  <span className="shrink-0 text-[10px] text-gray-400">{d.source === "meeting" ? "Meeting" : "Doc"}</span>
+                                </button>
+                              ))}
                             </div>
                           </div>
                         )}
                       </form>
                     )}
                   </div>
-                )
-              })}
-            </div>
+                </div>
+              )
+            })()}
+
+            {/* History — past weeks, read-only */}
+            {todoHistoryOpen && pastLists.length > 0 && (
+              <div className="border-t">
+                <p className="px-5 pt-3 pb-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">Previous weeks</p>
+                <div className="space-y-2 px-4 pb-4">
+                  {pastLists.map(list => (
+                    <div key={list.id} className="rounded-lg border bg-white px-4 py-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <p className="text-xs font-semibold text-gray-700 truncate flex-1">{list.title}</p>
+                        <span className="shrink-0 text-[10px] text-gray-400">{list.week_start}</span>
+                        {list.due_at && <span className="shrink-0 rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">{daysUntil(list.due_at)}</span>}
+                      </div>
+                      {list.items.length === 0 && <p className="text-xs text-gray-400">No items.</p>}
+                      <div className="space-y-1.5">
+                        {list.items.map(item => (
+                          <div key={item.id} className="flex items-start gap-2">
+                            <span className="shrink-0 mt-0.5 text-gray-400">{item.completed ? <CheckSquare size={12}/> : <Square size={12}/>}</span>
+                            <div className={`text-xs leading-snug ${item.completed ? "line-through text-gray-400" : "text-gray-600"}`}>
+                              {renderItemText(item.text)}
+                              {item.due_at && <span className="ml-1 text-[10px] text-amber-600">{daysUntil(item.due_at)}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── 4. Team access ── */}

@@ -34,6 +34,7 @@ class TodoItemIn(BaseModel):
     text: str
     mentions: list[str] = []
     doc_ids: list[str] = []
+    due_at: str = ""
 
 
 class TodoListPatch(BaseModel):
@@ -51,6 +52,7 @@ class TodoItemPatch(BaseModel):
     mentions: list[str] | None = None
     doc_ids: list[str] | None = None
     order: int | None = None
+    due_at: str | None = None
 
 
 class ReorderIn(BaseModel):
@@ -239,6 +241,7 @@ def create_todo_item(
                 "completed": False,
                 "mentions": body.mentions,
                 "doc_ids": body.doc_ids,
+                "due_at": body.due_at,
                 "order": len(items),
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
