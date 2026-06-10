@@ -710,17 +710,19 @@ export default function SkillsPage() {
                   />
                 </div>
               ) : (
-                {/* Package file tree — shown when ZIP was uploaded with extra files */}
-                {((selected as any).package_files?.length > 0) && (
-                  <div className="border-b px-6 py-3">
-                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">Package contents</p>
-                    <PackageFilesTree files={(selected as any).package_files} />
+                <>
+                  {/* Package file tree — shown when ZIP was uploaded with extra files */}
+                  {((selected as any).package_files?.length > 0) && (
+                    <div className="border-b px-6 py-3">
+                      <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">Package contents</p>
+                      <PackageFilesTree files={(selected as any).package_files} />
+                    </div>
+                  )}
+                  <div className="px-8 py-6 prose prose-sm max-w-none">
+                    {selected.created_by && <p className="text-xs text-gray-400">Created by {selected.created_by}</p>}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>
                   </div>
-                )}
-                <div className="px-8 py-6 prose prose-sm max-w-none">
-                  {selected.created_by && <p className="text-xs text-gray-400">Created by {selected.created_by}</p>}
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>
-                </div>
+                </>
               )}
             </div>
           </div>
