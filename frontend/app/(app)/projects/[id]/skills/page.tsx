@@ -4,8 +4,8 @@ import { useParams } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
-  AlertTriangle, Archive, Download, Edit2, FileUp, FolderOpen,
-  Plus, Save, Tag, Trash2, Upload, X,
+  AlertTriangle, Archive, Download, Edit2, FileUp, File, Folder,
+  FolderOpen, Plus, Save, Tag, Trash2, Upload, X,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { ProjectSkill } from "@/lib/types"
@@ -218,6 +218,64 @@ function DeleteDialog({
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── Package file tree ─────────────────────────────────────────────────────────
+
+/** Render a flat list of relative paths as an indented tree. */
+function PackageFilesTree({ files }: { files: string[] }) {
+  if (files.length === 0) return null
+
+  // Build a simple nested structure just for display
+  type Node = { name: string; children: Record<string, Node>; isFile: boolean }
+  const root: Node = { name: "", children: {}, isFile: false }
+
+  for (const f of files) {
+    const parts = f.split("/")
+    let node = root
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i]
+      if (!node.children[p]) {
+        node.children[p] = { name: p, children: {}, isFile: i === parts.length - 1 }
+      }
+      node = node.children[p]
+    }
+  }
+
+  function renderNode(node: Node, depth: number): React.ReactNode {
+    const entries = Object.values(node.children).sort((a, b) => {
+      // dirs before files
+      if (a.isFile !== b.isFile) return a.isFile ? 1 : -1
+      return a.name.localeCompare(b.name)
+    })
+    return entries.map(child => (
+      <div key={child.name}>
+        <div
+          className="flex items-center gap-1.5 py-0.5 text-xs text-gray-600"
+          style={{ paddingLeft: depth * 14 + 4 }}
+        >
+          {child.isFile
+            ? <File size={11} className="text-gray-400 shrink-0" />
+            : <Folder size={11} className="text-amber-400 shrink-0" />
+          }
+          <span className={child.isFile ? "" : "font-medium"}>{child.name}{!child.isFile ? "/" : ""}</span>
+        </div>
+        {!child.isFile && renderNode(child, depth + 1)}
+      </div>
+    ))
+  }
+
+  return (
+    <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2">
+      {/* SKILL.md always first */}
+      <div className="flex items-center gap-1.5 py-0.5 text-xs" style={{ paddingLeft: 4 }}>
+        <File size={11} className="text-blue-400 shrink-0" />
+        <span className="font-medium text-blue-700">SKILL.md</span>
+        <span className="text-gray-400 text-[10px]">main</span>
+      </div>
+      {renderNode(root, 0)}
     </div>
   )
 }
@@ -652,6 +710,13 @@ export default function SkillsPage() {
                   />
                 </div>
               ) : (
+                {/* Package file tree — shown when ZIP was uploaded with extra files */}
+                {((selected as any).package_files?.length > 0) && (
+                  <div className="border-b px-6 py-3">
+                    <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">Package contents</p>
+                    <PackageFilesTree files={(selected as any).package_files} />
+                  </div>
+                )}
                 <div className="px-8 py-6 prose prose-sm max-w-none">
                   {selected.created_by && <p className="text-xs text-gray-400">Created by {selected.created_by}</p>}
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>

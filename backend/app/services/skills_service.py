@@ -80,6 +80,22 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
     if include_content:
         result["content"] = content
         result["metadata"] = meta
+        # List extra files in the skill package directory (all files except SKILL.md itself)
+        package_files: list[str] = []
+        if len(parts) > 1:  # skill lives in a subdirectory (skills/{id}/SKILL.md)
+            skill_dir = path.rsplit("/", 1)[0]  # e.g. "skills/my-skill"
+            try:
+                all_paths = list_project_dir(project_id, skill_dir)
+                for p in sorted(all_paths):
+                    if p == path or p.endswith(".gitkeep"):
+                        continue
+                    # Make path relative to the skill dir
+                    rel_to_dir = p.removeprefix(skill_dir + "/")
+                    if rel_to_dir:
+                        package_files.append(rel_to_dir)
+            except Exception:
+                pass
+        result["package_files"] = package_files
     return result
 
 
