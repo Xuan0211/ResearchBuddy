@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation"
 import { BookOpen, Plus, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Codebook } from "@/lib/types"
+import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 
 export default function CodingPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -97,6 +98,9 @@ export default function CodingPage() {
           ))}
         </ul>
       )}
+      <div className="mt-6">
+        <ModuleResourcesPanel projectId={projectId} section="coding" canEdit={true} />
+      </div>
     </div>
   )
 }

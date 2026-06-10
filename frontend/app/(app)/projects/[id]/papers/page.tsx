@@ -5,6 +5,7 @@ import { RefreshCw, Settings, Download, Search, Image } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
 import ModuleLinksPanel from "@/components/ModuleLinksPanel"
+import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 
 export default function PapersPage() {
   const { id: projectId } = useParams<{ id: string }>()
@@ -256,6 +257,9 @@ export default function PapersPage() {
             </div>
           ))
         )}
+        <div className="mt-6">
+          <ModuleResourcesPanel projectId={projectId} section="papers" canEdit={!project || project.role === "member" || project.role === "admin"} />
+        </div>
       </div>
 
       {showZoteroConfig && (

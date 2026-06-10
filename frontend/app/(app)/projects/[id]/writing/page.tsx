@@ -3,6 +3,7 @@ import { useEffect, useState } from "react"
 import { useParams } from "next/navigation"
 import { ExternalLink, FileCode, GitBranch, Plus, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
+import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 
 interface WritingProject {
   id: string; title: string; description: string
@@ -243,6 +244,9 @@ export default function WritingPage() {
           </div>
         ) : null}
       </div>
+      </div>
+      <div className="px-6 py-4">
+        <ModuleResourcesPanel projectId={projectId} section="writing" canEdit={true} />
       </div>
     </div>
   )

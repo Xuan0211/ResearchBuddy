@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm"
 import { Archive, Download, Edit2, FileUp, FolderOpen, Plus, Save, Tag, Trash2, Upload, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { ProjectSkill } from "@/lib/types"
+import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const MAX_MB = 10
@@ -484,6 +485,9 @@ export default function SkillsPage() {
           </div>
         )}
       </main>
+      </div>
+      <div className="px-6 py-4 flex-shrink-0">
+        <ModuleResourcesPanel projectId={projectId} section="skills" canEdit={true} />
       </div>
     </div>
   )

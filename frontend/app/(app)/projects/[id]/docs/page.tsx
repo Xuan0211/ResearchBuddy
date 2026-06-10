@@ -6,6 +6,7 @@ import { ChevronRight, Folder, FolderPlus, MoreHorizontal, RefreshCw, X } from "
 import { api } from "@/lib/api"
 import type { Document } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
+import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 
 function DocMenu({
   doc,
@@ -338,6 +339,7 @@ export default function DocsPage() {
           })}
         </div>
       )}
+      <ModuleResourcesPanel projectId={projectId} section="document" canEdit={true} />
     </div>
   )
 }

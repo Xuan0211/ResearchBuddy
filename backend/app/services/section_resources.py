@@ -1,26 +1,26 @@
-"""Module-local documents, files, links, and skill attachments."""
+"""Module-local doc references, skill references, and links."""
 from __future__ import annotations
 
 import base64
 import json
-import shutil
 import uuid
 from pathlib import Path
 from typing import Any
 
 import frontmatter as frontmatter_lib
 
-from . import frontmatter as fm
 from .project_fs import list_project_dir, project_worktree, read_project_file
-from .skills_service import get_skill, list_skills, slugify
+from .skills_service import get_skill
 
 ALLOWED_SECTIONS = {"papers", "meetings", "coding", "writing", "document", "images", "prototype", "skills"}
-MAX_RESOURCE_BYTES = 25 * 1024 * 1024
-DOCS_ROOT = "document/docs"
+
+_DOCS_SCHEMA = "researchbuddy.module.docs"
+_SKILLS_SCHEMA = "researchbuddy.module.skills"
+_SCHEMA_VERSION = "2.0"
 
 
 class ResourceValidationError(ValueError):
-    """Raised when uploaded or attached resources cannot be safely parsed."""
+    """Raised when resources cannot be safely parsed."""
 
     def __init__(self, issues: list[dict[str, str]]):
         super().__init__("Resource validation failed")
@@ -60,24 +60,16 @@ def _resource_root(section: str, scope: str = "") -> str:
     }[section]
 
 
-def _docs_dir(section: str, scope: str = "") -> str:
-    return f"{_resource_root(section, scope)}/docs"
+def _links_path(section: str, scope: str = "") -> str:
+    return f"{_resource_root(section, scope)}/links.json"
 
 
-def _files_dir(section: str, scope: str = "") -> str:
-    return f"{_resource_root(section, scope)}/files"
-
-
-def _skills_dir(section: str, scope: str = "") -> str:
-    return f"{_resource_root(section, scope)}/skills"
-
-
-def _docs_refs_path(section: str, scope: str = "") -> str:
+def _docs_json_path(section: str, scope: str = "") -> str:
     return f"{_resource_root(section, scope)}/docs.json"
 
 
-def _links_path(section: str, scope: str = "") -> str:
-    return f"{_resource_root(section, scope)}/links.json"
+def _skills_json_path(section: str, scope: str = "") -> str:
+    return f"{_resource_root(section, scope)}/skills.json"
 
 
 def _read_json(project_id: str, path: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -86,6 +78,24 @@ def _read_json(project_id: str, path: str, fallback: dict[str, Any]) -> dict[str
         return data if isinstance(data, dict) else fallback
     except Exception:
         return fallback
+
+
+def _list_links(project_id: str, section: str, scope: str) -> list[dict[str, str]]:
+    data = _read_json(project_id, _links_path(section, scope), {"links": []})
+    links = data.get("links", [])
+    if not isinstance(links, list):
+        return []
+    cleaned: list[dict[str, str]] = []
+    for item in links:
+        if not isinstance(item, dict) or not item.get("url"):
+            continue
+        cleaned.append({
+            "id": str(item.get("id") or uuid.uuid4().hex[:8]),
+            "kind": str(item.get("kind") or "link"),
+            "title": str(item.get("title") or item.get("url")),
+            "url": str(item.get("url")),
+        })
+    return cleaned
 
 
 def _tree_from_paths(paths: list[str], root: str) -> list[dict[str, Any]]:
@@ -131,303 +141,191 @@ def _parse_markdown_doc(project_id: str, path: str, include_content: bool = Fals
     return result
 
 
-def _parse_local_skill(project_id: str, path: str, include_content: bool = False) -> dict[str, Any]:
-    content = read_project_file(project_id, path)
-    post = frontmatter_lib.loads(content)
-    meta = dict(post.metadata)
-    fallback_id = path.split("/")[-2] if path.endswith("/SKILL.md") else Path(path).stem
-    skill_id = str(meta.get("id") or fallback_id)
-    body = post.content
-    title = str(meta.get("title") or meta.get("name") or skill_id)
-    description = str(meta.get("description") or meta.get("summary") or "")
-    result: dict[str, Any] = {
-        "id": skill_id,
-        "title": title,
-        "description": description,
-        "tags": meta.get("tags", []),
-        "sections": [path.split("/", 1)[0]],
-        "path": path,
-        "folder": path.removeprefix("skills/").split("/", 1)[0],
-        "readonly": False,
-    }
-    if include_content:
-        result["content"] = content
-        result["metadata"] = meta
-    return result
-
-
-def _validate_markdown_content(content: str, path: str) -> None:
-    try:
-        frontmatter_lib.loads(content)
-    except Exception as exc:
-        raise ResourceValidationError([{"path": path, "error": f"frontmatter parse failed: {exc}"}])
-
-
-def _normalise_doc_path(project_id: str, path_or_id: str) -> str:
-    raw = _safe_rel_path(path_or_id)
-    candidates: list[str] = []
-    if raw.startswith(f"{DOCS_ROOT}/"):
-        candidates.append(raw)
-    elif raw.endswith(".md"):
-        candidates.append(f"{DOCS_ROOT}/{raw}")
-    else:
-        candidates.append(f"{DOCS_ROOT}/{raw}.md")
-    for candidate in candidates:
-        try:
-            read_project_file(project_id, candidate)
-            return candidate
-        except FileNotFoundError:
-            pass
-    for path in list_project_dir(project_id, DOCS_ROOT):
-        if not path.endswith(".md") or path.endswith(".gitkeep"):
-            continue
-        try:
-            parsed = _parse_markdown_doc(project_id, path)
-        except Exception:
-            continue
-        if parsed["id"] == raw or Path(path).stem == raw:
-            return path
-    raise FileNotFoundError(path_or_id)
-
-
-def _normalise_docs_folder(project_id: str, folder: str) -> str:
-    raw = _safe_rel_path(folder)
-    path = raw if raw.startswith(f"{DOCS_ROOT}/") else f"{DOCS_ROOT}/{raw}"
-    paths = list_project_dir(project_id, path)
-    if not paths:
-        raise FileNotFoundError(folder)
-    return path.rstrip("/")
-
-
-def _list_local_docs(project_id: str, section: str, scope: str) -> list[dict[str, Any]]:
-    docs: list[dict[str, Any]] = []
-    for path in list_project_dir(project_id, _docs_dir(section, scope)):
-        if not path.endswith(".md") or path.endswith(".gitkeep"):
-            continue
-        try:
-            docs.append(_parse_markdown_doc(project_id, path, include_content=True))
-        except Exception:
-            continue
-    return docs
-
-
-def _list_local_skills(project_id: str, section: str, scope: str) -> list[dict[str, Any]]:
-    skills: dict[str, dict[str, Any]] = {}
-    for path in list_project_dir(project_id, _skills_dir(section, scope)):
-        if not path.endswith(".md") or path.endswith(".gitkeep"):
-            continue
-        try:
-            skill = _parse_local_skill(project_id, path)
-        except Exception:
-            continue
-        existing = skills.get(skill["id"])
-        if not existing or path.endswith("/SKILL.md"):
-            skills[skill["id"]] = skill
-    return sorted(skills.values(), key=lambda item: item["title"].lower())
-
-
-def _list_links(project_id: str, section: str, scope: str) -> list[dict[str, str]]:
-    data = _read_json(project_id, _links_path(section, scope), {"links": []})
-    links = data.get("links", [])
-    if not isinstance(links, list):
-        return []
-    cleaned: list[dict[str, str]] = []
-    for item in links:
-        if not isinstance(item, dict) or not item.get("url"):
-            continue
-        cleaned.append({
-            "id": str(item.get("id") or uuid.uuid4().hex[:8]),
-            "kind": str(item.get("kind") or "link"),
-            "title": str(item.get("title") or item.get("url")),
-            "url": str(item.get("url")),
-        })
-    return cleaned
-
-
-def _list_doc_refs(project_id: str, section: str, scope: str) -> list[dict[str, str]]:
-    data = _read_json(project_id, _docs_refs_path(section, scope), {"items": []})
-    refs: list[dict[str, str]] = []
-    for item in data.get("items", []):
-        if isinstance(item, dict) and item.get("target"):
-            refs.append({
-                "type": str(item.get("type") or "doc"),
-                "path": str(item["target"]),
-                "source": str(item.get("source") or ""),
-            })
-    return refs
-
+# ── list ──────────────────────────────────────────────────────────────────────
 
 def list_section_resources(project_id: str, section: str, scope: str = "") -> dict[str, Any]:
     _check_section(section)
     root = _resource_root(section, scope)
-    local_docs = _list_local_docs(project_id, section, scope)
-    local_skills = _list_local_skills(project_id, section, scope)
-    root_paths = list_project_dir(project_id, root)
+
+    docs_data = _read_json(project_id, _docs_json_path(section, scope), {"items": []})
+    docs_items = [item for item in docs_data.get("items", []) if isinstance(item, dict)]
+
+    skills_data = _read_json(project_id, _skills_json_path(section, scope), {"items": []})
+    skills_items = [item for item in skills_data.get("items", []) if isinstance(item, dict)]
+
     return {
         "section": section,
-        "scope": scope,
-        "docs": sorted(local_docs, key=lambda item: item["title"].lower()),
-        "attached_docs": [],
-        "doc_refs": _list_doc_refs(project_id, section, scope),
-        "skills": local_skills,
-        "skill_ids": [skill["id"] for skill in local_skills],
+        "docs": docs_items,
+        "skills": skills_items,
         "links": _list_links(project_id, section, scope),
-        "tree": _tree_from_paths(root_paths, root),
-        "files": [path for path in list_project_dir(project_id, _files_dir(section, scope)) if not path.endswith(".gitkeep")],
-        "local_root": root,
     }
 
 
-def create_section_doc(project_id: str, section: str, title: str, content: str = "", scope: str = "") -> dict[str, Any]:
-    _check_section(section)
-    doc_id = slugify(title) or str(uuid.uuid4())[:8]
-    meta = {"id": doc_id, "title": title, "document_type": "module_doc", "section": section, "tags": []}
-    body = content if content.strip() else f"# {title}\n"
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Create {section} module doc: {title}"
-        path = wt / _docs_dir(section, scope) / f"{doc_id}.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists():
-            raise FileExistsError(doc_id)
-        fm.write(path, meta, body)
-    return {"id": doc_id}
+# ── doc refs ──────────────────────────────────────────────────────────────────
 
-
-def update_section_doc(
+def attach_doc_ref(
     project_id: str,
     section: str,
-    doc_id: str,
-    title: str | None = None,
-    content: str | None = None,
+    path: str,
+    kind: str = "doc",
+    note: str = "",
     scope: str = "",
 ) -> dict[str, Any]:
-    _check_section(section)
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Update {section} module doc: {doc_id}"
-        path = wt / _docs_dir(section, scope) / f"{doc_id}.md"
-        if not path.exists():
-            raise FileNotFoundError(doc_id)
-        meta, current = fm.read(path)
-        if title is not None:
-            meta["title"] = title
-        fm.write(path, meta, content if content is not None else current)
-    return {"ok": True}
-
-
-def delete_section_doc(project_id: str, section: str, doc_id: str, scope: str = "") -> None:
-    _check_section(section)
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Delete {section} module doc: {doc_id}"
-        path = wt / _docs_dir(section, scope) / f"{doc_id}.md"
-        if not path.exists():
-            raise FileNotFoundError(doc_id)
-        path.unlink()
-
-
-def attach_doc_ref(project_id: str, section: str, path: str, kind: str = "doc", scope: str = "") -> dict[str, Any]:
     _check_section(section)
     if kind not in {"doc", "folder"}:
         raise ValueError("kind must be doc or folder")
-    root_docs = _docs_dir(section, scope)
-    source = _normalise_doc_path(project_id, path) if kind == "doc" else _normalise_docs_folder(project_id, path)
-    sources = [source] if kind == "doc" else [
-        item for item in list_project_dir(project_id, source)
-        if item.endswith(".md") and not item.endswith(".gitkeep")
-    ]
-    issues: list[dict[str, str]] = []
-    for src in sources:
-        try:
-            _validate_markdown_content(read_project_file(project_id, src), src)
-        except ResourceValidationError as exc:
-            issues.extend(exc.issues)
-    if issues:
-        raise ResourceValidationError(issues)
+
+    safe_path = _safe_rel_path(path)
+
+    # Determine title
+    if kind == "doc":
+        content = read_project_file(project_id, safe_path)
+        post = frontmatter_lib.loads(content)
+        meta = dict(post.metadata)
+        title = str(meta.get("title") or Path(safe_path).stem)
+    else:
+        title = safe_path.rstrip("/").split("/")[-1]
+
+    item_id = uuid.uuid4().hex[:8]
+    item: dict[str, Any] = {
+        "id": item_id,
+        "type": kind,
+        "path": safe_path,
+        "title": title,
+        "note": note,
+    }
 
     with project_worktree(project_id) as wt:
-        wt.commit_message = f"Attach docs to {section}: {source}"
-        refs_path = wt / _docs_refs_path(section, scope)
-        refs_path.parent.mkdir(parents=True, exist_ok=True)
-        data = json.loads(refs_path.read_text(encoding="utf-8")) if refs_path.exists() else {"items": []}
-        items = [item for item in data.get("items", []) if isinstance(item, dict)]
-        for src in sources:
-            if kind == "folder":
-                rel = Path(src).relative_to(source)
-                target = f"{root_docs}/{Path(source).name}/{rel}"
-            else:
-                target = f"{root_docs}/{Path(src).name}"
-            dest = wt / target
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(read_project_file(project_id, src), encoding="utf-8")
-            item = {"type": kind, "source": src, "target": target}
-            if item not in items:
-                items.append(item)
-        refs_path.write_text(json.dumps({"items": items}, indent=2) + "\n", encoding="utf-8")
-    return {"ok": True}
+        wt.commit_message = f"Attach doc ref to {section}: {safe_path}"
+        json_path = wt / _docs_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _DOCS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict)]
+        # Avoid duplicate path
+        if any(i.get("path") == safe_path for i in items):
+            # Return existing item
+            existing = next(i for i in items if i.get("path") == safe_path)
+            return existing
+        items.append(item)
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    return item
 
 
-def detach_doc_ref(project_id: str, section: str, path: str, kind: str = "doc", scope: str = "") -> dict[str, Any]:
+def detach_doc_ref(project_id: str, section: str, item_id: str, scope: str = "") -> None:
     _check_section(section)
-    target = _safe_rel_path(path)
     with project_worktree(project_id) as wt:
-        wt.commit_message = f"Detach {kind} docs from {section}: {target}"
-        refs_path = wt / _docs_refs_path(section, scope)
-        data = json.loads(refs_path.read_text(encoding="utf-8")) if refs_path.exists() else {"items": []}
-        items = [item for item in data.get("items", []) if isinstance(item, dict)]
-        next_items = [item for item in items if str(item.get("target")) != target]
-        refs_path.parent.mkdir(parents=True, exist_ok=True)
-        refs_path.write_text(json.dumps({"items": next_items}, indent=2) + "\n", encoding="utf-8")
-        target_path = wt / target
-        if target_path.exists() and target_path.is_file():
-            target_path.unlink()
-    return {"ok": True}
+        wt.commit_message = f"Detach doc ref from {section}: {item_id}"
+        json_path = wt / _docs_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _DOCS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict) and str(i.get("id")) != item_id]
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def upload_section_files(
+def update_doc_ref_note(project_id: str, section: str, item_id: str, note: str, scope: str = "") -> dict[str, Any]:
+    _check_section(section)
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Update doc ref note in {section}: {item_id}"
+        json_path = wt / _docs_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _DOCS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict)]
+        updated: dict[str, Any] = {}
+        for item in items:
+            if str(item.get("id")) == item_id:
+                item["note"] = note
+                updated = item
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return updated
+
+
+# ── skill refs ────────────────────────────────────────────────────────────────
+
+def attach_skill(
     project_id: str,
     section: str,
-    files: list[tuple[str, bytes]],
-    target: str = "docs",
+    skill_id: str,
+    note: str = "",
     scope: str = "",
 ) -> dict[str, Any]:
     _check_section(section)
-    if target not in {"docs", "files"}:
-        raise ValueError("target must be docs or files")
-    issues: list[dict[str, str]] = []
-    prepared: list[tuple[str, bytes]] = []
-    total = 0
-    base_dir = _docs_dir(section, scope) if target == "docs" else _files_dir(section, scope)
-    for raw_path, content in files:
-        total += len(content)
-        try:
-            rel = _safe_rel_path(raw_path)
-        except ValueError as exc:
-            issues.append({"path": raw_path, "error": str(exc)})
-            continue
-        if rel.endswith(".gitkeep"):
-            continue
-        if target == "docs" and not rel.lower().endswith(".md"):
-            issues.append({"path": rel, "error": "Non-markdown files must be uploaded to files/"})
-            continue
-        if target == "docs":
-            try:
-                _validate_markdown_content(content.decode("utf-8"), rel)
-            except UnicodeDecodeError as exc:
-                issues.append({"path": rel, "error": f"Not valid UTF-8: {exc}"})
-            except ResourceValidationError as exc:
-                issues.extend(exc.issues)
-        prepared.append((f"{base_dir}/{rel}", content))
-    if total > MAX_RESOURCE_BYTES:
-        issues.append({"path": ".", "error": f"Upload exceeds {MAX_RESOURCE_BYTES // (1024 * 1024)} MB limit"})
-    if issues:
-        raise ResourceValidationError(issues)
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Upload {section} module files"
-        for rel_path, content in prepared:
-            path = wt / rel_path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
-    return {"ok": True, "count": len(prepared)}
+    skill = get_skill(project_id, skill_id)
+    item: dict[str, Any] = {
+        "id": skill["id"],
+        "path": skill["path"],
+        "title": skill["title"],
+        "description": skill.get("description", ""),
+        "note": note,
+    }
 
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Attach skill to {section}: {skill_id}"
+        json_path = wt / _skills_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _SKILLS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict)]
+        # Replace if already present (update), otherwise append
+        items = [i for i in items if str(i.get("id")) != skill_id]
+        items.append(item)
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+    return item
+
+
+def detach_skill(project_id: str, section: str, skill_id: str, scope: str = "") -> None:
+    _check_section(section)
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Detach skill from {section}: {skill_id}"
+        json_path = wt / _skills_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _SKILLS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict) and str(i.get("id")) != skill_id]
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def update_skill_note(project_id: str, section: str, skill_id: str, note: str, scope: str = "") -> dict[str, Any]:
+    _check_section(section)
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Update skill note in {section}: {skill_id}"
+        json_path = wt / _skills_json_path(section, scope)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        if json_path.exists():
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        else:
+            data = {"schema": _SKILLS_SCHEMA, "version": _SCHEMA_VERSION, "items": []}
+        items = [i for i in data.get("items", []) if isinstance(i, dict)]
+        updated: dict[str, Any] = {}
+        for item in items:
+            if str(item.get("id")) == skill_id:
+                item["note"] = note
+                updated = item
+        data["items"] = items
+        json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return updated
+
+
+# ── links (unchanged) ─────────────────────────────────────────────────────────
 
 def create_link(project_id: str, section: str, kind: str, title: str, url: str, scope: str = "") -> dict[str, str]:
     _check_section(section)
@@ -459,30 +357,4 @@ def delete_link(project_id: str, section: str, link_id: str, scope: str = "") ->
         data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {"links": []}
         links = [item for item in data.get("links", []) if isinstance(item, dict) and str(item.get("id")) != link_id]
         path.write_text(json.dumps({"links": links}, indent=2) + "\n", encoding="utf-8")
-    return {"ok": True}
-
-
-def attach_skill(project_id: str, section: str, skill_id: str, scope: str = "") -> dict[str, Any]:
-    _check_section(section)
-    skill = get_skill(project_id, skill_id)
-    content = str(skill.get("content") or "")
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Attach skill to {section}: {skill_id}"
-        path = wt / _skills_dir(section, scope) / skill_id / "SKILL.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
-    return {"ok": True}
-
-
-def detach_skill(project_id: str, section: str, skill_id: str, scope: str = "") -> dict[str, Any]:
-    _check_section(section)
-    with project_worktree(project_id) as wt:
-        wt.commit_message = f"Detach skill from {section}: {skill_id}"
-        root = wt / _skills_dir(section, scope)
-        target_dir = root / skill_id
-        target_file = root / f"{skill_id}.md"
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        elif target_file.exists():
-            target_file.unlink()
     return {"ok": True}
