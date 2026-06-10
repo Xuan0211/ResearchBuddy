@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import re
 import shutil
+import zipfile
+import io
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +67,8 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
         "description": description,
         "tags": meta.get("tags", []),
         "sections": meta.get("sections", []),  # which sections this skill belongs to
+        "created_by": meta.get("created_by", ""),
+        "creator_email": meta.get("creator_email", ""),
         "path": path,
         "folder": folder,
         "readonly": False,
@@ -122,11 +126,25 @@ def get_skill(project_id: str, skill_id: str) -> dict[str, Any]:
     raise FileNotFoundError(skill_id)
 
 
-def _build_skill_content(title: str, content: str, tags: list[str]) -> str:
+def _build_skill_content(
+    skill_id: str,
+    title: str,
+    content: str,
+    tags: list[str],
+    sections: list[str] | None = None,
+    created_by: str = "",
+    creator_email: str = "",
+) -> str:
     """Compose a full skill markdown file (frontmatter + body)."""
-    fm_lines = ["---", f"title: {title}"]
+    fm_lines = ["---", f"id: {skill_id}", f"title: {title}"]
     if tags:
         fm_lines.append("tags: [" + ", ".join(tags) + "]")
+    if sections:
+        fm_lines.append("sections: [" + ", ".join(sections) + "]")
+    if created_by:
+        fm_lines.append(f"created_by: {created_by}")
+    if creator_email:
+        fm_lines.append(f"creator_email: {creator_email}")
     fm_lines.append("---")
     fm_lines.append("")
     body = content if content.strip() else f"# {title}\n\nDescribe this skill here.\n"
@@ -139,11 +157,14 @@ def create_skill(
     content: str = "",
     tags: list[str] | None = None,
     folder: str = "",
+    sections: list[str] | None = None,
+    created_by: str = "",
+    creator_email: str = "",
 ) -> str:
     """Create a new skill file in skills/ and return its id."""
     skill_id = slugify(title)
     tags = tags or []
-    full_content = _build_skill_content(title, content, tags)
+    full_content = _build_skill_content(skill_id, title, content, tags, sections or [], created_by, creator_email)
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Create skill: {title}"
         if folder:
@@ -161,6 +182,11 @@ def create_skill_from_content(
     filename_stem: str,
     content: str,
     folder: str = "",
+    title: str | None = None,
+    tags: list[str] | None = None,
+    sections: list[str] | None = None,
+    created_by: str = "",
+    creator_email: str = "",
 ) -> str:
     """Upload a skill from raw .md content — preserves existing frontmatter."""
     # Try to parse the existing content
@@ -168,14 +194,34 @@ def create_skill_from_content(
         post = frontmatter_lib.loads(content)
         meta = dict(post.metadata)
         skill_id = str(meta.get("id") or slugify(filename_stem))
-        title = str(meta.get("title") or skill_id)
+        parsed_title = str(meta.get("title") or skill_id)
     except Exception:
         skill_id = slugify(filename_stem)
-        title = filename_stem
-        content = f"---\ntitle: {title}\n---\n\n{content}"
+        parsed_title = filename_stem
+        content = f"---\ntitle: {parsed_title}\n---\n\n{content}"
+
+    post = frontmatter_lib.loads(content)
+    meta = dict(post.metadata)
+    body = post.content
+    if title is not None:
+        meta["title"] = title
+    else:
+        meta["title"] = meta.get("title") or parsed_title
+    meta["id"] = skill_id
+    if tags is not None:
+        meta["tags"] = tags
+    if sections is not None:
+        meta["sections"] = sections
+    if created_by and not meta.get("created_by"):
+        meta["created_by"] = created_by
+    if creator_email and not meta.get("creator_email"):
+        meta["creator_email"] = creator_email
+    import yaml
+    front = yaml.dump(meta, allow_unicode=True, default_flow_style=False).rstrip()
+    content = f"---\n{front}\n---\n{body}"
 
     with project_worktree(project_id) as wt:
-        wt.commit_message = f"Upload skill: {title}"
+        wt.commit_message = f"Upload skill: {meta.get('title', skill_id)}"
         if folder:
             target_dir = wt / SKILLS_ROOT / slugify(folder)
         else:
@@ -185,12 +231,58 @@ def create_skill_from_content(
     return skill_id
 
 
+def create_skill_from_zip(
+    project_id: str,
+    raw: bytes,
+    filename_stem: str,
+    folder: str = "",
+    title: str | None = None,
+    tags: list[str] | None = None,
+    sections: list[str] | None = None,
+    created_by: str = "",
+    creator_email: str = "",
+) -> str:
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        names = [name for name in zf.namelist() if not name.endswith("/")]
+        root_skill = next((name for name in names if name == "SKILL.md"), "")
+        if not root_skill:
+            raise ValueError("Zip must contain SKILL.md at the archive root")
+        content = zf.read(root_skill).decode("utf-8", errors="replace")
+        extra_files = [
+            name for name in names
+            if name != "SKILL.md" and not name.startswith("/") and ".." not in Path(name).parts
+        ]
+        extras = [(name, zf.read(name)) for name in extra_files]
+    skill_id = create_skill_from_content(
+        project_id,
+        filename_stem=filename_stem,
+        content=content,
+        folder=folder,
+        title=title,
+        tags=tags,
+        sections=sections,
+        created_by=created_by,
+        creator_email=creator_email,
+    )
+    skill = get_skill(project_id, skill_id)
+    base = Path(skill["path"]).parent
+    if extras:
+        with project_worktree(project_id) as wt:
+            wt.commit_message = f"Extract skill package: {skill_id}"
+            for name, payload in extras:
+                target = wt / base / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payload)
+    return skill_id
+
+
 def update_skill(
     project_id: str,
     skill_id: str,
     title: str | None = None,
     content: str | None = None,
     tags: list[str] | None = None,
+    sections: list[str] | None = None,
 ) -> None:
     """Edit an existing skill's content and/or metadata."""
     skill = get_skill(project_id, skill_id)
@@ -213,6 +305,8 @@ def update_skill(
             meta["title"] = title
         if tags is not None:
             meta["tags"] = tags
+        if sections is not None:
+            meta["sections"] = sections
 
         new_body = content if content is not None else body
         # Rebuild the file

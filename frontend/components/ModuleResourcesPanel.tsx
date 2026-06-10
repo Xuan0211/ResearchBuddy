@@ -142,14 +142,17 @@ function FolderPickerGroup({
   docs,
   onAttach,
   onAttachFolder,
+  forceOpen = false,
 }: {
   folder: string
   docs: DocWithMeta[]
   onAttach: (path: string, kind: "doc" | "folder", note: string) => void
   onAttachFolder: (folder: string, note: string) => void
+  forceOpen?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [pendingFolder, setPendingFolder] = useState(false)
+  const expanded = forceOpen || open
 
   if (!folder) {
     return (
@@ -169,7 +172,7 @@ function FolderPickerGroup({
           onClick={() => setOpen(v => !v)}
           className="flex items-center gap-1 flex-1 min-w-0"
         >
-          {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+          {expanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
           <Folder size={11} className="text-amber-500 flex-shrink-0" />
           <span className="text-xs font-medium truncate text-gray-700">{folder}</span>
         </button>
@@ -194,7 +197,7 @@ function FolderPickerGroup({
           />
         </div>
       )}
-      {open && (
+      {expanded && (
         <div className="pl-4 space-y-0.5">
           {docs.map(doc => (
             <DocPickerRow key={doc.id} doc={doc} onAttach={onAttach} />
@@ -212,12 +215,14 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
   const [allDocs, setAllDocs] = useState<DocWithMeta[]>([])
   const [allSkills, setAllSkills] = useState<ProjectSkill[]>([])
   const [loading, setLoading] = useState(true)
+  const [open, setOpen] = useState(false)
 
   // picker open state
   const [showDocPicker, setShowDocPicker] = useState(false)
   const [showSkillPicker, setShowSkillPicker] = useState(false)
 
-  // skill search
+  // picker search
+  const [docSearch, setDocSearch] = useState("")
   const [skillSearch, setSkillSearch] = useState("")
 
   // inline note editing
@@ -272,7 +277,17 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
     [allDocs, attachedDocPaths],
   )
 
-  const docGroups = useMemo(() => buildDocGroups(availableDocs), [availableDocs])
+  const filteredDocs = useMemo(() => {
+    const q = docSearch.trim().toLowerCase()
+    if (!q) return availableDocs
+    return availableDocs.filter(d => {
+      const path = d._path || `document/docs/${d.id}.md`
+      const haystack = `${d.title} ${d.folder || ""} ${path} ${(d.tags || []).join(" ")}`.toLowerCase()
+      return haystack.includes(q)
+    })
+  }, [availableDocs, docSearch])
+
+  const docGroups = useMemo(() => buildDocGroups(filteredDocs), [filteredDocs])
 
   const availableSkills = useMemo(
     () => allSkills.filter(s => !attachedSkillIds.has(s.id)),
@@ -291,6 +306,8 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
 
   async function handleAttachDoc(path: string, kind: "doc" | "folder", note: string) {
     await api.post(resourceUrl("/doc-refs"), { path, kind, note })
+    setShowDocPicker(false)
+    setDocSearch("")
     await load()
   }
 
@@ -307,6 +324,8 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
 
   async function handleAttachSkill(skillId: string, note: string) {
     await api.post(resourceUrl("/skills"), { skill_id: skillId, note })
+    setShowSkillPicker(false)
+    setSkillSearch("")
     setPendingSkillId(null)
     setPendingSkillNote("")
     await load()
@@ -340,11 +359,21 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
 
   return (
     <section className="rounded-md border bg-white">
-      <div className="border-b px-4 py-3">
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        className="flex w-full items-center justify-between border-b px-4 py-3 text-left hover:bg-gray-50"
+      >
         <h3 className="text-sm font-medium">Module Resources</h3>
-      </div>
+        <span className="flex items-center gap-2 text-xs text-gray-400">
+          {(resources.docs.length + resources.skills.length) > 0 && (
+            <span>{resources.docs.length} docs · {resources.skills.length} skills</span>
+          )}
+          {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </span>
+      </button>
 
-      <div className="p-4 space-y-6">
+      {open && <div className="p-4 space-y-6">
         {/* ── Attached Documents ── */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -415,9 +444,16 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
           {/* Doc picker */}
           {showDocPicker && canEdit && (
             <div className="rounded-md border border-blue-100 bg-blue-50/40 p-2 space-y-1">
-              <p className="text-[10px] text-gray-500 font-medium px-1">Pick a document to attach:</p>
+              <input
+                value={docSearch}
+                onChange={e => setDocSearch(e.target.value)}
+                placeholder="Search docs..."
+                className="w-full rounded border px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-black"
+              />
               {availableDocs.length === 0 ? (
                 <p className="text-xs text-gray-400 px-1">All documents are already attached.</p>
+              ) : filteredDocs.length === 0 ? (
+                <p className="text-xs text-gray-400 px-1">No docs match your search.</p>
               ) : (
                 <div className="space-y-1">
                   {folderKeys.map(folder => (
@@ -427,6 +463,7 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
                       docs={docGroups[folder]}
                       onAttach={handleAttachDoc}
                       onAttachFolder={(f, note) => handleAttachDoc(f, "folder", note)}
+                      forceOpen={!!docSearch.trim()}
                     />
                   ))}
                 </div>
@@ -551,7 +588,7 @@ export default function ModuleResourcesPanel({ projectId, section, canEdit, scop
             </div>
           )}
         </div>
-      </div>
+      </div>}
     </section>
   )
 }

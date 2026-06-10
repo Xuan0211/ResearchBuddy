@@ -51,6 +51,7 @@ class SkillCreateIn(BaseModel):
     title: str
     content: str = ""
     tags: list[str] = []
+    sections: list[str] = []
     folder: str = ""          # optional subfolder under skills/
 
 
@@ -69,7 +70,10 @@ def create_skill(
         title=body.title,
         content=body.content,
         tags=body.tags,
+        sections=body.sections,
         folder=body.folder,
+        created_by=current_user.name or current_user.email,
+        creator_email=current_user.email,
     )
     return {"id": skill_id}
 
@@ -80,6 +84,7 @@ class SkillPatch(BaseModel):
     title: str | None = None
     content: str | None = None
     tags: list[str] | None = None
+    sections: list[str] | None = None
 
 
 @router.patch("/{skill_id}")
@@ -94,7 +99,7 @@ def update_skill(
     if body.content is not None and len(body.content.encode()) > MAX_SKILL_BYTES:
         raise HTTPException(413, "Skill content exceeds 10 MB limit")
     try:
-        skills.update_skill(project_id, skill_id, body.title, body.content, body.tags)
+        skills.update_skill(project_id, skill_id, body.title, body.content, body.tags, body.sections)
     except FileNotFoundError:
         raise HTTPException(404, "Skill not found")
     return {"ok": True}
@@ -126,22 +131,42 @@ async def upload_skill(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Upload a single Markdown skill file (max 10 MB)."""
+    """Upload a Markdown skill file or zip with root SKILL.md (max 10 MB)."""
     check_member(project_id, current_user, session, min_role="member")
 
-    if not (file.filename or "").endswith(".md"):
-        raise HTTPException(400, "Only .md files are supported")
+    filename = file.filename or "skill.md"
+    if not (filename.endswith(".md") or filename.endswith(".zip")):
+        raise HTTPException(400, "Only .md and .zip files are supported")
 
     raw = await file.read()
     if len(raw) > MAX_SKILL_BYTES:
         raise HTTPException(413, f"File exceeds 10 MB limit ({len(raw) // 1024} KB uploaded)")
 
-    content = raw.decode("utf-8", errors="replace")
-    # Extract title from filename or frontmatter
-    stem = Path(file.filename or "skill").stem
-    skill_id = skills.create_skill_from_content(
-        project_id, filename_stem=stem, content=content, folder=folder
-    )
+    stem = Path(filename).stem
+    try:
+        if filename.endswith(".zip"):
+            skill_id = skills.create_skill_from_zip(
+                project_id,
+                raw=raw,
+                filename_stem=stem,
+                folder=folder,
+                created_by=current_user.name or current_user.email,
+                creator_email=current_user.email,
+            )
+        else:
+            content = raw.decode("utf-8", errors="replace")
+            skill_id = skills.create_skill_from_content(
+                project_id,
+                filename_stem=stem,
+                content=content,
+                folder=folder,
+                created_by=current_user.name or current_user.email,
+                creator_email=current_user.email,
+            )
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Invalid zip file")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     return {"id": skill_id}
 
 

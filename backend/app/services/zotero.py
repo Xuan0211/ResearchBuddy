@@ -1,10 +1,12 @@
 """Sync Zotero library → project papers/*.md files."""
 import re
+from pathlib import Path
 
 import httpx
 
 from . import frontmatter as fm
 from .project_fs import project_worktree
+from .paper_bib import rebuild_papers_bib_files
 from ..core.paths import PAPERS_NOTES_DIR
 
 ZOTERO_API = "https://api.zotero.org"
@@ -237,5 +239,6 @@ async def sync_project(
                     paper_path = papers_dir / f"{zotero_key}.md"
                 fm.write(paper_path, meta, "\n## Notes\n\n\n## Related\n\n")
                 created += 1
+        rebuild_papers_bib_files(Path(str(wt)))
 
     return {"created": created, "updated": updated, "skipped": skipped, "total": len(items)}

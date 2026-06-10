@@ -183,10 +183,10 @@ export default function Home() {
               ResearchBuddy turns a research project into a shared workspace that humans can use in the browser and agents can use after cloning the repo.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <Link href="/login" className="inline-flex items-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white">
+              <Link href="/projects" className="inline-flex items-center gap-2 rounded-md bg-black px-4 py-2.5 text-sm font-medium text-white">
                 Start from a project <ArrowRight size={14} />
               </Link>
-              <Link href="/help" className="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+              <Link href="#how-it-works" className="inline-flex items-center gap-2 rounded-md border bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
                 See how it works
               </Link>
             </div>
@@ -201,7 +201,7 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-7xl px-6 py-14">
+      <section id="how-it-works" className="mx-auto max-w-7xl px-6 py-14">
         <div className="grid gap-8 lg:grid-cols-[0.75fr_1.25fr]">
           <div>
             <p className="text-sm font-semibold text-blue-600">How to use it</p>

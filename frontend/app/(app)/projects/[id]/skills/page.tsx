@@ -127,11 +127,14 @@ export default function SkillsPage() {
   const [editing, setEditing] = useState(false)
   const [editContent, setEditContent] = useState("")
   const [editTitle, setEditTitle] = useState("")
+  const [editTags, setEditTags] = useState("")
+  const [editSections, setEditSections] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [creating, setCreating] = useState(false)
   const [newTitle, setNewTitle] = useState("")
   const [newTags, setNewTags] = useState("")
   const [newFolder, setNewFolder] = useState("")
+  const [newSections, setNewSections] = useState<string[]>([])
   const [templateIdx, setTemplateIdx] = useState(3) // default: Blank
   const [filter, setFilter] = useState<string>("all")
   const fileRef = useRef<HTMLInputElement>(null)
@@ -155,7 +158,10 @@ export default function SkillsPage() {
     setSaving(true)
     try {
       await api.patch(`/api/projects/${projectId}/skills/${selected.id}`, {
-        title: editTitle, content: editContent,
+        title: editTitle,
+        content: editContent,
+        tags: editTags.split(",").map(t => t.trim()).filter(Boolean),
+        sections: editSections,
       })
       const updated = await api.get<ProjectSkill>(`/api/projects/${projectId}/skills/${selected.id}`)
       setSelected(updated)
@@ -182,9 +188,10 @@ export default function SkillsPage() {
       title: newTitle || "New Skill",
       content,
       tags,
+      sections: newSections,
       folder: newFolder,
     })
-    setCreating(false); setNewTitle(""); setNewTags(""); setNewFolder(""); setTemplateIdx(3)
+    setCreating(false); setNewTitle(""); setNewTags(""); setNewFolder(""); setNewSections([]); setTemplateIdx(3)
     await load()
   }
 
@@ -192,7 +199,7 @@ export default function SkillsPage() {
     const file = e.target.files?.[0]
     if (!file) return
     if (file.size > MAX_MB * 1024 * 1024) { alert(`File exceeds ${MAX_MB} MB`); return }
-    if (!file.name.endsWith(".md")) { alert("Only .md files supported"); return }
+    if (!file.name.endsWith(".md") && !file.name.endsWith(".zip")) { alert("Only .md or .zip files supported"); return }
     const form = new FormData()
     form.append("file", file)
     const token = localStorage.getItem("rb_token") ?? ""
@@ -200,8 +207,18 @@ export default function SkillsPage() {
       method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form,
     })
     if (!res.ok) { alert("Upload failed: " + (await res.text())); return }
+    const uploaded = await res.json()
     e.target.value = ""
     await load()
+    if (uploaded.id) {
+      const full = await api.get<ProjectSkill>(`/api/projects/${projectId}/skills/${uploaded.id}`)
+      setSelected(full)
+      setEditing(true)
+      setEditTitle(full.title)
+      setEditContent(full.content ?? "")
+      setEditTags((full.tags || []).join(", "))
+      setEditSections(full.sections || [])
+    }
   }
 
   function downloadSkill(skill: ProjectSkill) {
@@ -231,6 +248,10 @@ export default function SkillsPage() {
     })
   }
 
+  function toggleSection(value: string, current: string[], setter: (next: string[]) => void) {
+    setter(current.includes(value) ? current.filter(v => v !== value) : [...current, value])
+  }
+
   // Group skills by section tag
   const grouped: Record<string, ProjectSkill[]> = { all: skills }
   const sectionKeys = new Set<string>()
@@ -253,6 +274,7 @@ export default function SkillsPage() {
     <div className="flex h-full flex-col overflow-hidden bg-white">
       <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
         <h3 className="text-sm font-semibold">Skills</h3>
+        <ModuleResourcesPanel projectId={projectId} section="skills" canEdit={true} />
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -265,7 +287,7 @@ export default function SkillsPage() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">Skills</h3>
             <div className="flex gap-1">
-              <button onClick={() => fileRef.current?.click()} title="Upload .md"
+              <button onClick={() => fileRef.current?.click()} title="Upload .md or .zip"
                 className="p-1.5 rounded-lg text-gray-400 hover:text-black hover:bg-gray-100">
                 <FileUp size={14} />
               </button>
@@ -279,7 +301,7 @@ export default function SkillsPage() {
               </button>
             </div>
           </div>
-          <input ref={fileRef} type="file" accept=".md" className="hidden" onChange={uploadFile} />
+          <input ref={fileRef} type="file" accept=".md,.zip" className="hidden" onChange={uploadFile} />
 
           {/* Section filter tabs */}
           <div className="flex flex-wrap gap-1">
@@ -317,11 +339,12 @@ export default function SkillsPage() {
                     <p className={`text-xs font-medium truncate ${selected?.id === skill.id ? "text-white" : "text-gray-800"}`}>
                       {skill.title}
                     </p>
-                    {skill.description && (
+                  {skill.description && (
                       <p className={`text-[11px] mt-0.5 line-clamp-2 ${selected?.id === skill.id ? "text-gray-300" : "text-gray-500"}`}>
                         {skill.description}
                       </p>
-                    )}
+                  )}
+                  {skill.created_by && <p className={`text-[10px] mt-0.5 ${selected?.id === skill.id ? "text-gray-300" : "text-gray-400"}`}>By {skill.created_by}</p>}
                   </div>
                   <button
                     onClick={e => { e.stopPropagation(); deleteSkill(skill) }}
@@ -377,6 +400,17 @@ export default function SkillsPage() {
                 <input value={newTags} onChange={e => setNewTags(e.target.value)}
                   placeholder="research, ai, summary"
                   className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none" />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-2">Attach to modules</label>
+                <div className="flex flex-wrap gap-1">
+                  {Object.entries(SECTION_LABELS).map(([key,label]) => (
+                    <button key={key} type="button" onClick={()=>toggleSection(key,newSections,setNewSections)}
+                      className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${newSections.includes(key) ? "bg-black text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Folder (optional)</label>
@@ -437,7 +471,7 @@ export default function SkillsPage() {
                   </>
                 ) : (
                   <>
-                    <button onClick={() => { setEditing(true); setEditTitle(selected.title); setEditContent(selected.content ?? "") }}
+                    <button onClick={() => { setEditing(true); setEditTitle(selected.title); setEditContent(selected.content ?? ""); setEditTags((selected.tags || []).join(", ")); setEditSections(selected.sections || []) }}
                       className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-3 py-1.5 text-gray-600 hover:bg-gray-50">
                       <Edit2 size={12} /> Edit
                     </button>
@@ -454,14 +488,28 @@ export default function SkillsPage() {
             {/* Content */}
             <div className="flex-1 overflow-y-auto">
               {editing ? (
-                <textarea
-                  value={editContent}
-                  onChange={e => setEditContent(e.target.value)}
-                  className="w-full h-full p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed"
-                  spellCheck={false}
-                />
+                <div className="flex h-full flex-col">
+                  <div className="grid gap-3 border-b p-4 md:grid-cols-2">
+                    <input value={editTags} onChange={e=>setEditTags(e.target.value)} placeholder="tags, comma separated" className="rounded-lg border px-2 py-1.5 text-xs outline-none"/>
+                    <div className="flex flex-wrap gap-1">
+                      {Object.entries(SECTION_LABELS).map(([key,label]) => (
+                        <button key={key} type="button" onClick={()=>toggleSection(key,editSections,setEditSections)}
+                          className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${editSections.includes(key) ? "bg-black text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}>
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <textarea
+                    value={editContent}
+                    onChange={e => setEditContent(e.target.value)}
+                    className="min-h-0 flex-1 p-6 font-mono text-sm resize-none focus:outline-none leading-relaxed"
+                    spellCheck={false}
+                  />
+                </div>
               ) : (
                 <div className="px-8 py-6 prose prose-sm max-w-none">
+                  {selected.created_by && <p className="text-xs text-gray-400">Created by {selected.created_by}</p>}
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>
                 </div>
               )}
@@ -478,16 +526,13 @@ export default function SkillsPage() {
               </button>
               <button onClick={() => fileRef.current?.click()}
                 className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50">
-                <Upload size={12} /> Upload .md
+                <Upload size={12} /> Upload
               </button>
             </div>
             <p className="text-[11px] text-gray-300 mt-1">Max {MAX_MB} MB per skill</p>
           </div>
         )}
       </main>
-      </div>
-      <div className="px-6 py-4 flex-shrink-0">
-        <ModuleResourcesPanel projectId={projectId} section="skills" canEdit={true} />
       </div>
     </div>
   )

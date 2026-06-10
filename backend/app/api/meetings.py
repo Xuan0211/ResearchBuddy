@@ -1,5 +1,7 @@
 import json
 import re
+import secrets
+import uuid
 from datetime import date as date_type, date, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
@@ -7,12 +9,13 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
+from ..core.config import settings
 from ..core.db import get_session
 from ..core.paths import MEETINGS_DIR, MEETING_SETTINGS_PATH, MTGLOG_PATH
 from ..core.security import get_current_user
-from ..models import User
+from ..models import DocumentShare, User
 from ..services.contacts import list_contacts
 from ..services import document_tabs as dt
 from ..services import frontmatter as fm
@@ -182,6 +185,35 @@ class MeetingTabPatch(BaseModel):
 
 class TranscriptAnalysisIn(BaseModel):
     transcript: str
+
+
+def _meeting_share_id(mtg_id: str) -> str:
+    return f"meeting:{mtg_id}"
+
+
+def _share_public_url(token: str) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/share/docs/{token}"
+
+
+def _current_meeting_share(session: Session, project_id: str, mtg_id: str) -> DocumentShare | None:
+    return session.exec(
+        select(DocumentShare).where(
+            DocumentShare.project_id == uuid.UUID(project_id),
+            DocumentShare.doc_id == _meeting_share_id(mtg_id),
+            DocumentShare.enabled == True,  # noqa: E712
+        )
+    ).first()
+
+
+def _share_payload(share: DocumentShare | None) -> dict:
+    if not share:
+        return {"enabled": False, "token": "", "url": ""}
+    return {
+        "enabled": share.enabled,
+        "token": share.token,
+        "url": _share_public_url(share.token),
+        "created_at": share.created_at,
+    }
 
 
 def _mtg_id(d: date_type, title: str) -> str:
@@ -434,6 +466,66 @@ def get_meeting(
         return public
     except FileNotFoundError:
         raise HTTPException(404, "Meeting not found")
+
+
+@router.get("/{mtg_id}/share")
+def get_meeting_share(
+    project_id: str,
+    mtg_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    try:
+        _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+    return _share_payload(_current_meeting_share(session, project_id, mtg_id))
+
+
+@router.post("/{mtg_id}/share")
+def create_meeting_share(
+    project_id: str,
+    mtg_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    try:
+        _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+
+    existing = _current_meeting_share(session, project_id, mtg_id)
+    if existing:
+        return _share_payload(existing)
+
+    share = DocumentShare(
+        project_id=uuid.UUID(project_id),
+        doc_id=_meeting_share_id(mtg_id),
+        token=secrets.token_urlsafe(24),
+        created_by=current_user.id,
+    )
+    session.add(share)
+    session.commit()
+    session.refresh(share)
+    return _share_payload(share)
+
+
+@router.delete("/{mtg_id}/share")
+def disable_meeting_share(
+    project_id: str,
+    mtg_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    share = _current_meeting_share(session, project_id, mtg_id)
+    if share:
+        share.enabled = False
+        session.add(share)
+        session.commit()
+    return {"enabled": False, "token": "", "url": ""}
 
 
 @router.patch("/{mtg_id}")

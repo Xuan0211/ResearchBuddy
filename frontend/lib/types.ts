@@ -71,6 +71,7 @@ export interface Document {
   tags: string[]
   papers: string[]
   updated: string
+  folder?: string
   tabs?: DocumentTab[]
   _body?: string
   _path?: string
@@ -87,6 +88,10 @@ export interface ProjectSkill {
   title: string
   description: string
   tags: string[]
+  sections?: string[]
+  attached_sections?: string[]
+  created_by?: string
+  creator_email?: string
   path: string
   readonly: boolean
   content?: string

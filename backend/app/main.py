@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings
 from .core.db import init_db
-from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync
+from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync, todos, global_skills
 import pathlib
 
 scheduler = AsyncIOScheduler()
@@ -59,6 +59,7 @@ app.add_middleware(
 app.mount("/api/images", StaticFiles(directory=str(settings.images_dir)), name="images")
 
 app.include_router(auth.router, prefix="/api")
+app.include_router(todos.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
 app.include_router(papers.router, prefix="/api")
 app.include_router(meetings.router, prefix="/api")
@@ -69,6 +70,7 @@ app.include_router(git.router)
 app.include_router(codebooks.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 app.include_router(skills.router, prefix="/api")
+app.include_router(global_skills.router, prefix="/api")
 app.include_router(section_resources.router, prefix="/api")
 app.include_router(writing.router, prefix="/api")
 app.include_router(gantt.router, prefix="/api")

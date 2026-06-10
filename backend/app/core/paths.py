@@ -4,8 +4,10 @@ SCHEMA_VERSION = "2.0"
 
 PAPERS_NOTES_DIR = "papers/notes"
 PAPERS_BIB_DIR = "papers/bib"
-ALL_REFERENCES_BIB = "papers/bib/all_references.read_only.bib"
-ALL_AI_GENERATED_BIB = "papers/bib/all_ai_generated.bib"
+PAPERS_REFERENCES_BIB = "papers/bib/references.read_only.bib"
+PAPERS_AI_GENERATED_BIB = "papers/bib/ai-generated.bib"
+ALL_REFERENCES_BIB = PAPERS_REFERENCES_BIB
+ALL_AI_GENERATED_BIB = PAPERS_AI_GENERATED_BIB
 
 MEETINGS_DIR = "meetings/mygdocs"
 MEETING_SETTINGS_PATH = "meetings/manifest.read_only.json"

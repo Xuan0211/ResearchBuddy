@@ -248,6 +248,7 @@ export default function DocsPage() {
         </button>
       </div>
 
+      <ModuleResourcesPanel projectId={projectId} section="document" canEdit={true} />
 
       {/* Create folder inline */}
       {creatingFolder && (
@@ -339,7 +340,6 @@ export default function DocsPage() {
           })}
         </div>
       )}
-      <ModuleResourcesPanel projectId={projectId} section="document" canEdit={true} />
     </div>
   )
 }

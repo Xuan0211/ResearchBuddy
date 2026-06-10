@@ -1,14 +1,14 @@
 "use client"
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
-import { useParams } from "next/navigation"
+import { useParams, useRouter } from "next/navigation"
 import {
-  CalendarClock, Check, ChevronDown, ChevronRight, Crown,
-  Database, ExternalLink, Folder, Mail, Pencil, Plus,
-  RefreshCw, Shield, Trash2, UserPlus, X,
+  AtSign, CalendarClock, Check, CheckSquare, ChevronDown, ChevronRight, Crown,
+  Database, ExternalLink, FileText, Folder, GripVertical, Mail, Pencil, Plus,
+  RefreshCw, Shield, Square, Trash2, UserPlus, X,
 } from "lucide-react"
 import { api } from "@/lib/api"
-import type { Contact, Document, Project, ProjectMember } from "@/lib/types"
+import type { Contact, Document, Meeting, Project, ProjectMember } from "@/lib/types"
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 interface GanttItem { id: string; title: string; start: string; end: string; doc_id?: string; doc_ids?: string[]; mentions?: string[]; note?: string }
@@ -18,13 +18,16 @@ interface GanttData { tracks: GanttTrack[]; milestones: GanttMilestone[] }
 interface TimelineEditor { mode: "create" | "edit"; trackId: string; itemId?: string; title: string; start: string; end: string; doc_ids: string[]; mentions: string[]; note: string; x: number; y: number }
 interface HoveredTimelineItem { item: GanttItem; track: GanttTrack; x: number; y: number }
 interface ResizeDrag { trackId: string; itemId: string; edge: "start" | "end"; clientX: number; originalStart: string; originalEnd: string; currentStart: string; currentEnd: string }
-interface DocOption { id: string; title: string; path: string; search: string }
+interface DocOption { id: string; title: string; path: string; search: string; folder?: string; source?: "docs" | "meeting"; meetingId?: string }
 interface DocTreeNode { type: "dir" | "doc"; name: string; path: string; doc?: DocOption; children?: DocTreeNode[] }
 interface PersonOption { value: string; label: string; search: string }
 interface DriveRootResponse { configured: boolean; settings_path: string; root_folder_id: string; root_folder_name: string; root_folder_link: string; source: string }
 interface BatchDriveSyncResponse { ok: boolean; root: { root_folder_name: string; root_folder_link: string }; docs?: { synced: number; failed?: number } | null; meetings?: { synced: number; failed?: number } | null }
 interface ZoteroConfig { api_key: string; library_id: string; library_type: "user" | "group"; api_key_set?: boolean }
 interface HomeSettings { countdown_title: string; countdown_target: string }
+interface TodoItem { id: string; text: string; mentions: string[]; doc_ids: string[]; completed: boolean; order: number; is_mine?: boolean }
+interface TodoList { id: string; title: string; week_start: string; meeting_id?: string; doc_ids?: string[]; due_at?: string; order: number; items: TodoItem[]; is_mine?: boolean }
+interface TodoItemForm { text: string; mentions: string[]; doc_ids: string[] }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -43,30 +46,56 @@ function monthsBetween(start: Date, end: Date) {
 function docPath(doc: Document) { return doc._path || `document/docs/${doc.id}.md` }
 function docTitleFromPath(path: string) { return path.split("/").pop()?.replace(/\.md$/, "") || path }
 function docDisplay(option: DocOption) { return option.title }
-function buildDocOptions(docs: Document[]): DocOption[] {
-  return docs.map(doc => { const path = docPath(doc); const title = doc.title || docTitleFromPath(path); return { id: doc.id, title, path, search: `${path} ${title}`.toLowerCase() } }).sort((a,b)=>a.path.localeCompare(b.path))
+function buildDocOptions(docs: Document[], meetings: Meeting[] = []): DocOption[] {
+  const regular = docs.map(doc => {
+    const path = docPath(doc)
+    const title = doc.title || docTitleFromPath(path)
+    return { id: doc.id, title, path, search: `${doc.folder || ""} ${title}`.toLowerCase(), folder: doc.folder, source: "docs" as const }
+  })
+  const meetingDocs = meetings.flatMap(m => (m.tabs || []).map(tab => ({
+    id: `meeting:${m.id}:${tab.id}`,
+    title: `${m.title} / ${tab.title}`,
+    path: `meeting:${m.id}/${tab.id}`,
+    search: `${m.title} ${tab.title} ${m.date}`.toLowerCase(),
+    folder: "Meetings",
+    source: "meeting" as const,
+    meetingId: m.id,
+  })))
+  return [...regular, ...meetingDocs].sort((a,b)=>a.title.localeCompare(b.title))
 }
 function buildDocTree(options: DocOption[]) {
-  const root: DocTreeNode = { type:"dir", name:"docs", path:"docs", children:[] }
+  // Group by the `folder` metadata field, not by filesystem path
+  const dirs: Record<string, DocTreeNode> = {}
+  const result: DocTreeNode[] = []
+  const ungrouped: DocTreeNode[] = []
   for (const opt of options) {
-    const rel = opt.path.replace(/^document\/docs\//, "")
-    const parts = rel.split("/")
-    let node = root
-    parts.forEach((part, i) => {
-      const isLeaf = i === parts.length-1
-      if (isLeaf) { node.children!.push({ type:"doc", name:part.replace(/\.md$/,""), path:opt.path, doc:opt }); return }
-      const dirPath = `docs/${parts.slice(0,i+1).join("/")}`
-      let child = node.children!.find(n => n.type==="dir" && n.path===dirPath)
-      if (!child) { child={ type:"dir", name:part, path:dirPath, children:[] }; node.children!.push(child) }
-      node = child
-    })
+    const leaf: DocTreeNode = { type:"doc", name: opt.title, path: opt.path, doc: opt }
+    if (opt.folder) {
+      if (!dirs[opt.folder]) {
+        dirs[opt.folder] = { type:"dir", name: opt.folder, path: `folder:${opt.folder}`, children:[] }
+        result.push(dirs[opt.folder])
+      }
+      dirs[opt.folder].children!.push(leaf)
+    } else {
+      ungrouped.push(leaf)
+    }
   }
-  function sort(n: DocTreeNode) { n.children?.sort((a,b)=>a.type!==b.type?a.type==="dir"?-1:1:a.name.localeCompare(b.name)); n.children?.forEach(sort) }
-  sort(root); return root.children||[]
+  result.sort((a,b)=>a.name.localeCompare(b.name))
+  return [...ungrouped, ...result]
 }
 const TRACK_COLORS = ["#3b82f6","#10b981","#f59e0b","#ef4444","#8b5cf6","#ec4899","#06b6d4"]
 const ROLE_LABELS: Record<ProjectMember["role"],string> = { admin:"Admin", member:"Can edit", viewer:"Read only" }
 function roleDescription(r: ProjectMember["role"]) { return r==="admin"?"Manage members and edit everything":r==="member"?"Edit project content":"View project content" }
+function currentWeekStart() { const d=new Date(); const day=(d.getDay()+6)%7; d.setDate(d.getDate()-day); return d.toISOString().split("T")[0] }
+function daysUntil(value?: string) {
+  if (!value) return ""
+  const target = new Date(value).getTime()
+  if (Number.isNaN(target)) return ""
+  const days = Math.ceil((target - Date.now()) / DAY_MS)
+  if (days < 0) return `${Math.abs(days)}d overdue`
+  if (days === 0) return "due today"
+  return `${days}d left`
+}
 
 // ── Flip-clock digit (white card, black text) ────────────────────────────────────
 function FlipUnit({ value, label }: { value: number; label: string }) {
@@ -131,6 +160,7 @@ function FlipUnit({ value, label }: { value: number; label: string }) {
 // ── Main ────────────────────────────────────────────────────────────────────────
 export default function HomePage() {
   const { id: projectId } = useParams<{ id: string }>()
+  const router = useRouter()
 
   // Core data
   const [gantt, setGantt] = useState<GanttData>({ tracks: [], milestones: [] })
@@ -138,6 +168,7 @@ export default function HomePage() {
   const [contacts, setContacts] = useState<Contact[]>([])
   const [members, setMembers] = useState<ProjectMember[]>([])
   const [docs, setDocs] = useState<Document[]>([])
+  const [meetings, setMeetings] = useState<Meeting[]>([])
   const [loading, setLoading] = useState(true)
 
   // Project name editing
@@ -177,8 +208,24 @@ export default function HomePage() {
   const [hoveredItem, setHoveredItem] = useState<HoveredTimelineItem | null>(null)
   const [draggingItem, setDraggingItem] = useState<string | null>(null)
   const [docQuery, setDocQuery] = useState("")
+  const [showTimelineDocPicker, setShowTimelineDocPicker] = useState(false)
   const [personQuery, setPersonQuery] = useState("")
-  const [expandedDocDirs, setExpandedDocDirs] = useState<Set<string>>(new Set(["docs"]))
+  const [expandedDocDirs, setExpandedDocDirs] = useState<Set<string>>(new Set())
+
+  // TODO state
+  const [todoLists, setTodoLists] = useState<TodoList[]>([])
+  const [todoWeek, setTodoWeek] = useState(currentWeekStart())
+  const [todoHistoryOpen, setTodoHistoryOpen] = useState(false)
+  const [listFormOpen, setListFormOpen] = useState(false)
+  const [newListTitle, setNewListTitle] = useState("")
+  const [newListMeetingId, setNewListMeetingId] = useState("")
+  const [newListDueAt, setNewListDueAt] = useState("")
+  const [dragListId, setDragListId] = useState<string | null>(null)
+  const [dragItem, setDragItem] = useState<{ listId: string; itemId: string } | null>(null)
+  const [itemForms, setItemForms] = useState<Record<string, TodoItemForm>>({})
+  const [peoplePickerListId, setPeoplePickerListId] = useState<string | null>(null)
+  const [docPickerListId, setDocPickerListId] = useState<string | null>(null)
+  const [todoDocQuery, setTodoDocQuery] = useState("")
 
   // Team state
   const [addingMember, setAddingMember] = useState(false)
@@ -198,12 +245,14 @@ export default function HomePage() {
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).catch(() => [] as Contact[]),
       api.get<ProjectMember[]>(`/api/projects/${projectId}/members`).catch(() => [] as ProjectMember[]),
       api.get<Document[]>(`/api/projects/${projectId}/docs`).catch(() => [] as Document[]),
+      api.get<{ meetings: Meeting[] }>(`/api/projects/${projectId}/meetings`).catch(() => ({ meetings: [] })),
+      api.get<{ week_start: string; lists: TodoList[] }>(`/api/projects/${projectId}/todos`).catch(() => ({ week_start: currentWeekStart(), lists: [] })),
       api.get<{ connected: boolean }>("/api/auth/google-drive/status").catch(() => ({ connected: false })),
       api.get<DriveRootResponse>(`/api/projects/${projectId}/drive-root`).catch(() => null),
       api.get<ZoteroConfig>(`/api/projects/${projectId}/zotero`).catch(() => null),
       api.get<HomeSettings>(`/api/projects/${projectId}/home-settings`).catch(() => ({ countdown_title: "", countdown_target: "" })),
-    ]).then(([p, g, c, m, d, drive, root, zotero, home]) => {
-      setProject(p); setNameInput(p.name); setGantt(g); setContacts(c); setMembers(m); setDocs(d)
+    ]).then(([p, g, c, m, d, mtg, td, drive, root, zotero, home]) => {
+      setProject(p); setNameInput(p.name); setGantt(g); setContacts(c); setMembers(m); setDocs(d); setMeetings(mtg.meetings); setTodoLists(td.lists); setTodoWeek(td.week_start)
       setDriveConnected(drive.connected); setDriveRoot(root)
       if (root?.root_folder_name) setFolderName(root.root_folder_name)
       if (zotero) setZoteroConfig({ api_key: "", library_id: zotero.library_id || "", library_type: zotero.library_type || "user", api_key_set: zotero.api_key_set })
@@ -336,13 +385,13 @@ export default function HomePage() {
     await api.delete(`/api/projects/${projectId}/gantt/tracks/${trackId}`)
     setGantt(g => ({ ...g, tracks: g.tracks.filter(t => t.id !== trackId) }))
   }
-  function openCreateItem(trackId: string, date: string, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setPersonQuery(""); setTimelineEditor({ mode:"create", trackId, title:"", start:date, end:addDays(date,7), doc_ids:[], mentions:[], note:"", x, y }) }
-  function openEditItem(track: GanttTrack, item: GanttItem, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setPersonQuery(""); setTimelineEditor({ mode:"edit", trackId:track.id, itemId:item.id, title:item.title, start:item.start, end:item.end, doc_ids:normalizeDocIds(item), mentions:item.mentions??[], note:item.note??"", x, y }) }
-  function addEditorDoc(docId: string) { setTimelineEditor(ed => ed && !ed.doc_ids.includes(docId) ? { ...ed, doc_ids:[...ed.doc_ids, docId] } : ed); setDocQuery("") }
+  function openCreateItem(trackId: string, date: string, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setShowTimelineDocPicker(false); setPersonQuery(""); setTimelineEditor({ mode:"create", trackId, title:"", start:date, end:addDays(date,7), doc_ids:[], mentions:[], note:"", x, y }) }
+  function openEditItem(track: GanttTrack, item: GanttItem, x: number, y: number) { setHoveredItem(null); setDocQuery(""); setShowTimelineDocPicker(false); setPersonQuery(""); setTimelineEditor({ mode:"edit", trackId:track.id, itemId:item.id, title:item.title, start:item.start, end:item.end, doc_ids:normalizeDocIds(item), mentions:item.mentions??[], note:item.note??"", x, y }) }
+  function addEditorDoc(docId: string) { setTimelineEditor(ed => ed && !ed.doc_ids.includes(docId) ? { ...ed, doc_ids:[...ed.doc_ids, docId] } : ed); setDocQuery(""); setShowTimelineDocPicker(false) }
   function removeEditorDoc(docId: string) { setTimelineEditor(ed => ed ? { ...ed, doc_ids: ed.doc_ids.filter(id => id!==docId) } : ed) }
   function addEditorPerson(value: string) { setTimelineEditor(ed => ed && !ed.mentions.includes(value) ? { ...ed, mentions:[...ed.mentions, value] } : ed); setPersonQuery("") }
   function removeEditorPerson(value: string) { setTimelineEditor(ed => ed ? { ...ed, mentions: ed.mentions.filter(m => m!==value) } : ed) }
-  const docOptions = buildDocOptions(docs)
+  const docOptions = buildDocOptions(docs, meetings)
   const docTree = buildDocTree(docOptions)
   const docById = new Map(docOptions.map(d => [d.id, d]))
   const addFirstMatchingDoc = () => { const q=docQuery.trim().toLowerCase(); if(!q) return; const m=docOptions.find(d=>d.search.includes(q)); if(m) addEditorDoc(m.id) }
@@ -366,6 +415,112 @@ export default function HomePage() {
     await api.delete(`/api/projects/${projectId}/gantt/tracks/${trackId}/items/${itemId}`)
     setGantt(g => ({ ...g, tracks: g.tracks.map(t => t.id===trackId ? { ...t, items: t.items.filter(i=>i.id!==itemId) } : t) }))
     if (timelineEditor?.itemId===itemId) setTimelineEditor(null)
+  }
+
+  const blankItemForm: TodoItemForm = { text:"", mentions:[], doc_ids:[] }
+
+  function updateItemForm(listId: string, patch: Partial<TodoItemForm>) {
+    setItemForms(prev => ({ ...prev, [listId]: { ...(prev[listId] ?? blankItemForm), ...patch } }))
+  }
+
+  async function loadTodos(week = todoWeek, includeHistory = todoHistoryOpen) {
+    const res = await api.get<{ week_start: string; lists: TodoList[] }>(`/api/projects/${projectId}/todos?week_start=${encodeURIComponent(week)}&include_history=${includeHistory}`)
+    setTodoWeek(res.week_start)
+    setTodoLists(res.lists)
+  }
+
+  async function createTodoList(e: React.FormEvent) {
+    e.preventDefault()
+    const list = await api.post<TodoList>(`/api/projects/${projectId}/todos`, {
+      title: newListTitle,
+      week_start: todoWeek,
+      meeting_id: newListMeetingId,
+      due_at: newListDueAt,
+    })
+    setTodoLists(prev => [...prev, list])
+    setNewListTitle("")
+    setNewListMeetingId("")
+    setNewListDueAt("")
+    setListFormOpen(false)
+  }
+
+  async function createTodoItem(listId: string, e: React.FormEvent) {
+    e.preventDefault()
+    const form = itemForms[listId] ?? blankItemForm
+    const item = await api.post<TodoItem>(`/api/projects/${projectId}/todos/${listId}/items`, {
+      text: form.text,
+      mentions: form.mentions,
+      doc_ids: form.doc_ids,
+    })
+    setTodoLists(prev => prev.map(list => list.id === listId ? { ...list, items: [...list.items, item], is_mine: list.is_mine || item.is_mine } : list))
+    setItemForms(prev => ({ ...prev, [listId]: blankItemForm }))
+  }
+
+  async function patchTodoList(listId: string, patch: Partial<TodoList>) {
+    const updated = await api.patch<TodoList>(`/api/projects/${projectId}/todos/${listId}`, patch)
+    setTodoLists(prev => prev.map(list => list.id === listId ? updated : list))
+  }
+
+  function toggleTodoPerson(listId: string, value: string) {
+    const form = itemForms[listId] ?? blankItemForm
+    const next = form.mentions.includes(value) ? form.mentions.filter(v => v !== value) : [...form.mentions, value]
+    updateItemForm(listId, { mentions: next })
+  }
+
+  function insertTodoDoc(listId: string, doc: DocOption) {
+    const form = itemForms[listId] ?? blankItemForm
+    const text = form.text.replace(/\{\{[^{}]*$/, "") + `{{${doc.title}}}`
+    const doc_ids = form.doc_ids.includes(doc.id) ? form.doc_ids : [...form.doc_ids, doc.id]
+    updateItemForm(listId, { text, doc_ids })
+    setTodoDocQuery("")
+    setDocPickerListId(null)
+  }
+
+  async function patchTodoItem(listId: string, itemId: string, patch: Partial<TodoItem>) {
+    const updated = await api.patch<TodoItem>(`/api/projects/${projectId}/todos/${listId}/items/${itemId}`, patch)
+    setTodoLists(prev => prev.map(list => list.id === listId
+      ? { ...list, items: list.items.map(item => item.id === itemId ? updated : item), is_mine: list.items.some(item => item.id === itemId ? updated.is_mine : item.is_mine) }
+      : list))
+  }
+
+  async function deleteTodoItem(listId: string, itemId: string) {
+    await api.delete(`/api/projects/${projectId}/todos/${listId}/items/${itemId}`)
+    setTodoLists(prev => prev.map(list => list.id === listId ? { ...list, items: list.items.filter(item => item.id !== itemId) } : list))
+  }
+
+  async function deleteTodoList(listId: string) {
+    await api.delete(`/api/projects/${projectId}/todos/${listId}`)
+    setTodoLists(prev => prev.filter(list => list.id !== listId))
+  }
+
+  async function reorderTodoList(targetId: string) {
+    if (!dragListId || dragListId === targetId) return
+    const next = [...todoLists]
+    const from = next.findIndex(t => t.id === dragListId)
+    const to = next.findIndex(t => t.id === targetId)
+    if (from < 0 || to < 0) return
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    const ordered = next.map((t, i) => ({ ...t, order: i }))
+    setTodoLists(ordered)
+    setDragListId(null)
+    await api.post(`/api/projects/${projectId}/todos/reorder`, { ids: ordered.map(t => t.id) })
+  }
+
+  async function reorderTodoItem(listId: string, targetId: string) {
+    if (!dragItem || dragItem.listId !== listId || dragItem.itemId === targetId) return
+    const list = todoLists.find(t => t.id === listId)
+    if (!list) return
+    const next = [...list.items]
+    const from = next.findIndex(t => t.id === dragItem.itemId)
+    const to = next.findIndex(t => t.id === targetId)
+    if (from < 0 || to < 0) return
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    const ordered = next.map((t, i) => ({ ...t, order: i }))
+    setTodoLists(prev => prev.map(t => t.id === listId ? { ...t, items: ordered } : t))
+    setDragItem(null)
+    await api.post(`/api/projects/${projectId}/todos/${listId}/items/reorder`, { ids: ordered.map(t => t.id) })
   }
   function handleTimelineWheel(e: React.WheelEvent<HTMLDivElement>) {
     if (!scrollRef.current) return; e.preventDefault()
@@ -672,10 +827,12 @@ export default function HomePage() {
                 <div>
                   <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">Linked docs</span>
                   <div className="mt-1 flex flex-wrap gap-1.5">{timelineEditor.doc_ids.map(id=>{const d=docById.get(id);return<span key={id} className="inline-flex max-w-full items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-[11px] text-blue-700"><span className="truncate">{d?docDisplay(d):id}</span><button type="button" onClick={()=>removeEditorDoc(id)} className="text-blue-400 hover:text-blue-700"><X size={10}/></button></span>})}</div>
-                  <div className="mt-2 rounded-lg border">
+                  {!showTimelineDocPicker ? (
+                    <button type="button" onClick={()=>setShowTimelineDocPicker(true)} className="mt-2 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"><Plus size={11}/> Add doc</button>
+                  ) : <div className="mt-2 rounded-lg border">
                     <div className="flex items-center gap-1 border-b px-2 py-1.5"><input value={docQuery} onChange={e=>setDocQuery(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addFirstMatchingDoc()}}} placeholder="Search docs" className="min-w-0 flex-1 text-xs outline-none"/><button type="button" onClick={addFirstMatchingDoc} className="rounded-md border px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50">Add</button></div>
                     <div className="max-h-28 overflow-auto p-1">{docQuery.trim()?docOptions.filter(d=>d.search.includes(docQuery.trim().toLowerCase())).slice(0,8).map(d=><button key={d.id} type="button" onClick={()=>addEditorDoc(d.id)} disabled={timelineEditor.doc_ids.includes(d.id)} className="flex w-full items-center justify-between gap-2 rounded px-1.5 py-1 text-left text-xs hover:bg-gray-50 disabled:opacity-45"><span className="min-w-0 truncate text-gray-700">{docDisplay(d)}</span><span className="shrink-0 text-[10px] text-gray-400">{timelineEditor.doc_ids.includes(d.id)?"Added":"Add"}</span></button>):docTree.length?docTree.map(n=>renderDocNode(n)):<p className="px-2 py-2 text-xs text-gray-400">No docs</p>}</div>
-                  </div>
+                  </div>}
                 </div>
                 <div>
                   <span className="text-[11px] font-medium uppercase tracking-wide text-gray-400">People</span>
@@ -696,6 +853,118 @@ export default function HomePage() {
               </div>
             </form>
           )}
+
+          {/* ── 4. TODO ── */}
+          <div className="rounded-xl border bg-white shadow-sm overflow-hidden">
+            <div className="border-b px-5 py-3 flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold text-sm">TODO</h3>
+                <p className="mt-0.5 text-xs text-gray-400">{todoHistoryOpen ? "All lists" : `Week of ${todoWeek}`}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={async()=>{ const next=!todoHistoryOpen; setTodoHistoryOpen(next); await loadTodos(todoWeek,next) }} className="rounded-lg border px-2.5 py-1.5 text-xs text-gray-600 hover:bg-gray-50">
+                  {todoHistoryOpen ? "This week" : "History"}
+                </button>
+                {canEdit && <button onClick={()=>setListFormOpen(v=>!v)} className="inline-flex items-center gap-1 rounded-lg bg-black px-3 py-1.5 text-xs text-white"><Plus size={12}/>New list</button>}
+              </div>
+            </div>
+            {listFormOpen && canEdit && (
+              <form onSubmit={createTodoList} className="grid gap-2 border-b bg-gray-50 px-4 py-3 md:grid-cols-[1fr_180px_180px_auto_auto]">
+                <input autoFocus required value={newListTitle} onChange={e=>setNewListTitle(e.target.value)} placeholder="List title, e.g. This week's writing tasks" className="min-w-0 rounded-lg border px-2 py-1.5 text-sm outline-none"/>
+                <select value={newListMeetingId} onChange={e=>setNewListMeetingId(e.target.value)} className="rounded-lg border px-2 py-1.5 text-xs text-gray-600 outline-none">
+                  <option value="">Bind meeting</option>
+                  {meetings.map(m=><option key={m.id} value={m.id}>{m.date} · {m.title}</option>)}
+                </select>
+                <input type="datetime-local" value={newListDueAt} onChange={e=>setNewListDueAt(e.target.value)} className="rounded-lg border px-2 py-1.5 text-xs outline-none"/>
+                <button type="submit" className="rounded-lg bg-black px-3 py-1.5 text-xs text-white">Add list</button>
+                <button type="button" onClick={()=>setListFormOpen(false)} className="rounded-lg border px-3 py-1.5 text-xs text-gray-600">Cancel</button>
+              </form>
+            )}
+            <div className="grid gap-3 p-4 lg:grid-cols-2">
+              {todoLists.length === 0 ? (
+                <p className="text-sm text-gray-400 lg:col-span-2">No TODO lists yet.</p>
+              ) : todoLists.map(list => {
+                const boundMeeting = list.meeting_id ? meetings.find(m => m.id === list.meeting_id) : null
+                const listDocs = (list.doc_ids || []).map(id=>docById.get(id)).filter(Boolean) as DocOption[]
+                const form = itemForms[list.id] ?? blankItemForm
+                const filteredTodoDocs = (todoDocQuery.trim()?docOptions.filter(d=>d.search.includes(todoDocQuery.trim().toLowerCase()) || d.title.toLowerCase().includes(todoDocQuery.trim().toLowerCase())):docOptions).slice(0,10)
+                return (
+                  <div key={list.id} draggable={canEdit} onDragStart={()=>setDragListId(list.id)} onDragOver={e=>e.preventDefault()} onDrop={()=>reorderTodoList(list.id)}
+                    className={`rounded-lg border shadow-sm ${list.is_mine ? "border-red-300 bg-red-50" : "bg-white"}`}>
+                    <div className="flex items-start justify-between gap-2 border-b px-3 py-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-900">{list.title}</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-500">{list.week_start}</span>
+                          {boundMeeting && <button onClick={()=>router.push(`/projects/${projectId}/meetings/${boundMeeting.id}`)} className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] text-blue-700">{boundMeeting.title}</button>}
+                          {list.due_at && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-700">{daysUntil(list.due_at)}</span>}
+                          {listDocs.map(d=><button key={d.id} onClick={()=>d.meetingId?router.push(`/projects/${projectId}/meetings/${d.meetingId}`):router.push(`/projects/${projectId}/docs/${d.id}`)} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}</button>)}
+                        </div>
+                      </div>
+                      {canEdit && <div className="flex items-center gap-1 text-gray-300">
+                        <select value={list.meeting_id || ""} onChange={e=>patchTodoList(list.id,{meeting_id:e.target.value})} className="max-w-28 rounded border px-1 py-0.5 text-[10px] text-gray-500">
+                          <option value="">Meeting</option>
+                          {meetings.map(m=><option key={m.id} value={m.id}>{m.title}</option>)}
+                        </select>
+                        <input type="datetime-local" value={list.due_at || ""} onChange={e=>patchTodoList(list.id,{due_at:e.target.value})} className="w-32 rounded border px-1 py-0.5 text-[10px] text-gray-500"/>
+                        <GripVertical size={14}/><button onClick={()=>deleteTodoList(list.id)} className="hover:text-red-500"><Trash2 size={13}/></button>
+                      </div>}
+                    </div>
+                    <div className="divide-y">
+                      {list.items.length === 0 ? (
+                        <p className="px-3 py-3 text-xs text-gray-400">No items yet.</p>
+                      ) : list.items.map(item => {
+                        const attachedDocs = item.doc_ids.map(id=>docById.get(id)).filter(Boolean) as DocOption[]
+                        return (
+                          <div key={item.id} draggable={canEdit} onDragStart={()=>setDragItem({ listId:list.id, itemId:item.id })} onDragOver={e=>e.preventDefault()} onDrop={()=>reorderTodoItem(list.id,item.id)}
+                            className={`flex items-start gap-2 px-3 py-2 ${item.is_mine ? "bg-red-50 text-red-700" : ""}`}>
+                            <button onClick={()=>patchTodoItem(list.id,item.id,{completed:!item.completed})} className="mt-0.5 text-gray-500 hover:text-black">{item.completed?<CheckSquare size={15}/>:<Square size={15}/>}</button>
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-sm ${item.completed ? "line-through text-gray-400" : ""}`}>{item.text}</p>
+                              <div className="mt-1.5 flex flex-wrap gap-1.5">
+                                {item.mentions.map(m=><span key={m} className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">@{m}</span>)}
+                                {attachedDocs.map(d=><button key={d.id} onClick={()=>d.meetingId?router.push(`/projects/${projectId}/meetings/${d.meetingId}`):router.push(`/projects/${projectId}/docs/${d.id}`)} className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}</button>)}
+                              </div>
+                            </div>
+                            {canEdit && <div className="flex items-center gap-1 text-gray-300"><GripVertical size={14}/><button onClick={()=>deleteTodoItem(list.id,item.id)} className="hover:text-red-500"><Trash2 size={13}/></button></div>}
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {canEdit && (
+                      <form onSubmit={e=>createTodoItem(list.id,e)} className="border-t bg-gray-50 px-3 py-3">
+                        <div className="flex items-center gap-1 rounded-lg border bg-white px-1.5 py-1">
+                          <button type="button" onClick={()=>setPeoplePickerListId(peoplePickerListId===list.id?null:list.id)} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Mention people"><AtSign size={14}/></button>
+                          <button type="button" onClick={()=>setDocPickerListId(docPickerListId===list.id?null:list.id)} className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-black" title="Reference document"><FileText size={14}/></button>
+                          <input required value={form.text} onChange={e=>{ updateItemForm(list.id,{text:e.target.value}); if(e.target.value.includes("{{")) setDocPickerListId(list.id) }} placeholder="Add item. Type {{ to reference docs or meeting docs" className="min-w-0 flex-1 px-1 py-1 text-xs outline-none"/>
+                          <button type="submit" className="rounded-md bg-black px-2.5 py-1 text-xs text-white">Add</button>
+                        </div>
+                        {(form.mentions.length > 0 || form.doc_ids.length > 0) && (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {form.mentions.map(v=>{const p=personByValue.get(v)||personByValue.get(v.trim().toLowerCase());return <span key={v} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-[10px] text-gray-600">@{p?.label||v}<button type="button" onClick={()=>toggleTodoPerson(list.id,v)} className="text-gray-400 hover:text-black"><X size={9}/></button></span>})}
+                            {form.doc_ids.map(id=>{const d=docById.get(id); return d ? <span key={id} className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] text-emerald-700">{docDisplay(d)}<button type="button" onClick={()=>updateItemForm(list.id,{doc_ids:form.doc_ids.filter(x=>x!==id)})} className="text-emerald-400 hover:text-emerald-700"><X size={9}/></button></span> : null})}
+                          </div>
+                        )}
+                        {peoplePickerListId === list.id && (
+                          <div className="mt-2 max-h-28 overflow-auto rounded-lg border bg-white p-1">
+                            {peopleOptions.map(p=><button key={p.value} type="button" onClick={()=>toggleTodoPerson(list.id,p.value)} className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-gray-50"><span className="truncate">{p.label}</span><span className="text-[10px] text-gray-400">{form.mentions.includes(p.value)?"Added":"Add"}</span></button>)}
+                          </div>
+                        )}
+                        {docPickerListId === list.id && (
+                          <div className="mt-2 rounded-lg border bg-white">
+                            <div className="border-b px-2 py-1"><input value={todoDocQuery} onChange={e=>setTodoDocQuery(e.target.value)} placeholder="Search docs" className="w-full text-xs outline-none"/></div>
+                            <div className="max-h-36 overflow-auto p-1">
+                              {filteredTodoDocs.map(d=><button key={d.id} type="button" onClick={()=>insertTodoDoc(list.id,d)} className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-gray-50"><span className="min-w-0 truncate">{docDisplay(d)}</span><span className="shrink-0 text-[10px] text-gray-400">{d.source==="meeting"?"Meeting":"Doc"}</span></button>)}
+                            </div>
+                          </div>
+                        )}
+                      </form>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
 
           {/* ── 4. Team access ── */}
           <div className="rounded-xl border bg-white shadow-sm overflow-hidden">

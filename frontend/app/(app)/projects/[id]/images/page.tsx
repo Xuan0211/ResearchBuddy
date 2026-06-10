@@ -11,6 +11,7 @@ export default function ImagesPage() {
       <div>
         <h2 className="text-base font-semibold">Images</h2>
       </div>
+      <ModuleResourcesPanel projectId={projectId} section="images" canEdit={true} />
       <ModuleLinksPanel
         projectId={projectId}
         section="images"
@@ -19,7 +20,6 @@ export default function ImagesPage() {
         labelPlaceholder="Figma file or frame"
         urlPlaceholder="https://figma.com/..."
       />
-      <ModuleResourcesPanel projectId={projectId} section="images" canEdit={true} />
     </div>
   )
 }

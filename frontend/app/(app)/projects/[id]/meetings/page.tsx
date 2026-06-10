@@ -219,6 +219,7 @@ export default function MeetingsPage() {
         <h3 className="font-medium text-sm">Meetings</h3>
       </div>
 
+      <ModuleResourcesPanel projectId={projectId} section="meetings" canEdit={true} />
 
       {/* ── Meeting Settings (permanent card) ── */}
       <div className="border border-gray-100 rounded-xl bg-white shadow-sm overflow-hidden">
@@ -527,9 +528,6 @@ export default function MeetingsPage() {
           </ul>
         </div>
       )}
-      <div className="mt-6 px-4">
-        <ModuleResourcesPanel projectId={projectId} section="meetings" canEdit={true} />
-      </div>
     </div>
   )
 }

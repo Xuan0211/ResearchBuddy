@@ -31,15 +31,14 @@ export default function ModuleLinksPanel({
 
   function resourcePath(path: string) {
     const qs = scope ? `?scope=${encodeURIComponent(scope)}` : ""
-    const joiner = path.includes("?") ? "&" : "?"
-    return `/api/projects/${projectId}/module-resources/${section}${path}${scope && path.includes("?") ? `${joiner}scope=${encodeURIComponent(scope)}` : qs}`
+    return `/api/projects/${projectId}/module-resources/${section}${path}${qs}`
   }
 
   async function load() {
     setLoading(true)
     try {
       const res = await api.get<SectionResources>(resourcePath(""))
-      setLinks((res.links ?? []).filter(link => link.kind === kind || kind === "link"))
+      setLinks((res.links ?? []).filter(link => kind === "link" ? (link.kind === "link" || !link.kind) : link.kind === kind))
     } finally {
       setLoading(false)
     }

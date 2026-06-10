@@ -51,6 +51,7 @@ export default function CodingPage() {
         </button>
       </div>
 
+      <ModuleResourcesPanel projectId={projectId} section="coding" canEdit={true} />
 
       {creating && (
         <form onSubmit={createCodebook} className="border border-gray-100 rounded-xl p-4 space-y-3 bg-white shadow-sm">
@@ -98,9 +99,6 @@ export default function CodingPage() {
           ))}
         </ul>
       )}
-      <div className="mt-6">
-        <ModuleResourcesPanel projectId={projectId} section="coding" canEdit={true} />
-      </div>
     </div>
   )
 }

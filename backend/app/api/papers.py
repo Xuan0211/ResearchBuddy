@@ -1,5 +1,6 @@
 import re
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
@@ -16,6 +17,7 @@ from ..models import PaperImage, User
 from ..services import frontmatter as fm
 from ..services.project_fs import list_project_dir, read_project_file, project_worktree
 from ..services import paper_cache
+from ..services.paper_bib import generate_bibtex, rebuild_papers_bib_files
 from .projects import check_member
 
 router = APIRouter(prefix="/projects/{project_id}/papers", tags=["papers"])
@@ -33,38 +35,7 @@ def _parse_paper(project_id: str, rel_path: str) -> dict:
 
 
 def _generate_bibtex(meta: dict) -> str:
-    citekey = meta.get("id", "unknown")
-    item_type = meta.get("item_type", "")
-    is_proceedings = "conference" in item_type.lower() or "proceedings" in item_type.lower()
-    bib_type = "inproceedings" if is_proceedings else "article"
-    venue_field = "booktitle" if is_proceedings else "journal"
-
-    authors_raw = meta.get("authors", [])
-    def fmt(a):
-        if "," in a:
-            parts = [p.strip() for p in a.split(",", 1)]
-            return f"{parts[1]} {parts[0]}" if parts[1] else parts[0]
-        return a
-    authors_bib = " and ".join(fmt(a) for a in authors_raw)
-
-    lines = [f"@{bib_type}{{{citekey},"]
-    lines.append(f"  title     = {{{meta.get('title', '')}}},")
-    if authors_bib:
-        lines.append(f"  author    = {{{authors_bib}}},")
-    if meta.get("year"):
-        lines.append(f"  year      = {{{meta['year']}}},")
-    if meta.get("venue"):
-        lines.append(f"  {venue_field:<9} = {{{meta['venue']}}},")
-    if meta.get("doi"):
-        lines.append(f"  doi       = {{{meta['doi']}}},")
-    if meta.get("arxiv_id"):
-        lines.append(f"  eprint    = {{{meta['arxiv_id']}}},")
-        lines.append(f"  archivePrefix = {{arXiv}},")
-    url = (meta.get("links") or {}).get("url", "")
-    if url:
-        lines.append(f"  url       = {{{url}}},")
-    lines.append("}")
-    return "\n".join(lines)
+    return generate_bibtex(meta)
 
 
 def _paper_public(meta: dict) -> dict:
@@ -234,6 +205,7 @@ async def create_paper(
         body.setdefault("preview_image", "")
         body.setdefault("source", "manual")
         fm.write(paper_path, body, "\n## Notes\n\n\n## Related\n\n")
+        rebuild_papers_bib_files(Path(str(wt)))
 
     paper_cache.invalidate(project_id)
     return {"id": paper_id}
@@ -275,6 +247,7 @@ def update_paper(
         if notes is not None:
             meta, _ = fm.read(paper_path)
             fm.write(paper_path, meta, f"\n## Notes\n\n{notes}\n")
+        rebuild_papers_bib_files(Path(str(wt)))
 
     paper_cache.invalidate(project_id)
     return {"ok": True}
@@ -603,6 +576,7 @@ def add_ai_paper(
             raise HTTPException(404, f"{WRITING_AI_BIB} not found in writing project {body.writing_id}")
         existing = path.read_text(encoding="utf-8")
         path.write_text(existing.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
+        rebuild_papers_bib_files(Path(str(wt)))
     return {"ok": True}
 
 
@@ -645,5 +619,6 @@ def confirm_ai_paper(
         wt.commit_message = f"Confirm AI reference: {body.key}"
         (wt / ai_path).write_text(new_ai_text, encoding="utf-8")
         (wt / ref_path).write_text(new_ref_text, encoding="utf-8")
+        rebuild_papers_bib_files(Path(str(wt)))
 
     return {"ok": True, "key": body.key}

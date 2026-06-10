@@ -2,12 +2,14 @@
 import { useCallback, useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
-import { Download, ExternalLink, Plus, Trash2 } from "lucide-react"
+import { Copy, Download, ExternalLink, Plus, Share2, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { DocumentTab, Meeting } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
 
 const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
+
+interface ShareState { enabled: boolean; token: string; url: string; created_at?: string }
 
 export default function MeetingDetailPage() {
   const { id: projectId, mtgId } = useParams<{ id: string; mtgId: string }>()
@@ -17,6 +19,9 @@ export default function MeetingDetailPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [pullingDrive, setPullingDrive] = useState(false)
+  const [share, setShare] = useState<ShareState | null>(null)
+  const [shareOpen, setShareOpen] = useState(false)
+  const [shareBusy, setShareBusy] = useState(false)
   const [titleDraft, setTitleDraft] = useState("")
   const [editingTitle, setEditingTitle] = useState(false)
   const [metaDraft, setMetaDraft] = useState({ date: "", start_time: "", end_time: "", location: "", attendees: "" })
@@ -25,9 +30,13 @@ export default function MeetingDetailPage() {
   const [analyzingTranscript, setAnalyzingTranscript] = useState(false)
 
   useEffect(() => {
-    api.get<Meeting>(`/api/projects/${projectId}/meetings/${mtgId}`)
-      .then(m => {
+    Promise.all([
+      api.get<Meeting>(`/api/projects/${projectId}/meetings/${mtgId}`),
+      api.get<ShareState>(`/api/projects/${projectId}/meetings/${mtgId}/share`).catch(() => null),
+    ])
+      .then(([m, shareState]) => {
         setMeeting(m)
+        if (shareState) setShare(shareState)
         setTitleDraft(m.title)
         setMetaDraft({
           date: m.date ?? "",
@@ -40,6 +49,41 @@ export default function MeetingDetailPage() {
       })
       .finally(() => setLoading(false))
   }, [projectId, mtgId])
+
+  function localShareUrl(next = share) {
+    if (!next?.token) return ""
+    if (next.url) return next.url
+    if (typeof window === "undefined") return ""
+    return `${window.location.origin}/share/docs/${next.token}`
+  }
+
+  async function createShareLink() {
+    setShareBusy(true)
+    try {
+      const res = await api.post<ShareState>(`/api/projects/${projectId}/meetings/${mtgId}/share`, {})
+      setShare(res)
+      setShareOpen(true)
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  async function disableShareLink() {
+    if (!confirm("Disable this public share link?")) return
+    setShareBusy(true)
+    try {
+      const res = await api.delete<ShareState>(`/api/projects/${projectId}/meetings/${mtgId}/share`)
+      setShare(res)
+    } finally {
+      setShareBusy(false)
+    }
+  }
+
+  async function copyShareLink() {
+    const url = localShareUrl()
+    if (!url) return
+    await navigator.clipboard.writeText(url)
+  }
 
   const saveContent = useCallback(async (content: string) => {
     setSaving(true)
@@ -188,6 +232,33 @@ export default function MeetingDetailPage() {
           <button onClick={downloadIcs} className="flex items-center gap-1 text-xs text-gray-500 hover:text-black">
             <Download size={11} /> Download .ics
           </button>
+          <div className="space-y-1.5 rounded-md border px-2 py-2">
+            <button
+              onClick={() => {
+                setShareOpen(v => !v)
+                if (!share?.enabled) createShareLink()
+              }}
+              disabled={shareBusy}
+              className="flex items-center gap-1 text-xs text-gray-600 hover:text-black disabled:opacity-50"
+            >
+              <Share2 size={11} /> {share?.enabled ? "Share meeting doc" : shareBusy ? "Creating..." : "Create share link"}
+            </button>
+            {shareOpen && (
+              <div className="space-y-1">
+                {share?.enabled ? (
+                  <>
+                    <div className="rounded bg-gray-50 px-2 py-1 text-[10px] text-gray-500 break-all">{localShareUrl()}</div>
+                    <div className="flex gap-2">
+                      <button onClick={copyShareLink} className="inline-flex items-center gap-1 text-[11px] text-gray-500 hover:text-black"><Copy size={10}/>Copy</button>
+                      <button onClick={disableShareLink} disabled={shareBusy} className="text-[11px] text-red-500 hover:text-red-700 disabled:opacity-50">Disable</button>
+                    </div>
+                  </>
+                ) : (
+                  <button onClick={createShareLink} disabled={shareBusy} className="text-[11px] text-gray-500 hover:text-black disabled:opacity-50">Create public link</button>
+                )}
+              </div>
+            )}
+          </div>
           <button onClick={pullFromDrive} disabled={pullingDrive}
             className="flex items-center gap-1 text-xs text-gray-500 hover:text-black disabled:opacity-50">
             <Download size={11} /> {pullingDrive ? "Pulling…" : "Pull from Drive"}

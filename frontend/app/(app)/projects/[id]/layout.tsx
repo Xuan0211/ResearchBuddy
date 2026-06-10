@@ -1,4 +1,5 @@
 "use client"
+import { useEffect } from "react"
 import Link from "next/link"
 import { useParams, usePathname } from "next/navigation"
 
@@ -18,6 +19,10 @@ const TABS = [
 export default function ProjectLayout({ children }: { children: React.ReactNode }) {
   const { id } = useParams<{ id: string }>()
   const path = usePathname()
+
+  useEffect(() => {
+    localStorage.setItem("rb_current_project", JSON.stringify({ id }))
+  }, [id])
 
   return (
     <div className="flex flex-col h-full">

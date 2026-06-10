@@ -748,8 +748,16 @@ def get_public_doc_share(
     if not share:
         raise HTTPException(404, "Share link not found")
 
+    document_type = "doc"
     try:
-        doc = _parse_doc(str(share.project_id), f"{DOCS_DIR}/{share.doc_id}.md")
+        if share.doc_id.startswith("meeting:"):
+            from .meetings import _parse_meeting
+            from ..core.paths import MEETINGS_DIR
+            mtg_id = share.doc_id.split(":", 1)[1]
+            doc = _parse_meeting(str(share.project_id), f"{MEETINGS_DIR}/{mtg_id}.md")
+            document_type = "meeting"
+        else:
+            doc = _parse_doc(str(share.project_id), f"{DOCS_DIR}/{share.doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404, "Shared document not found")
 
@@ -761,7 +769,8 @@ def get_public_doc_share(
             "name": project.name if project else "Shared project",
         },
         "document": {
-            k: v for k, v in doc.items() if k not in {"_path"}
+            **{k: v for k, v in doc.items() if k not in {"_path"}},
+            "share_type": document_type,
         },
         "created_at": share.created_at,
     }

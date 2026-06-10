@@ -82,6 +82,7 @@ export default function WritingPage() {
     <div className="flex h-full flex-col overflow-hidden">
       <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
         <h3 className="text-sm font-semibold">Writing</h3>
+        <ModuleResourcesPanel projectId={projectId} section="writing" canEdit={true} />
       </div>
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -244,9 +245,6 @@ export default function WritingPage() {
           </div>
         ) : null}
       </div>
-      </div>
-      <div className="px-6 py-4">
-        <ModuleResourcesPanel projectId={projectId} section="writing" canEdit={true} />
       </div>
     </div>
   )
