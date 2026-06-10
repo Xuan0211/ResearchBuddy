@@ -1,14 +1,20 @@
 """Writing / LaTeX workspace API."""
+import io
 import json
 import re
 import shutil
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 
+import git
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import Session
 
+from ..core.config import settings
 from ..core.db import get_session
 from ..core.paths import (
     SCHEMA_VERSION,
@@ -16,10 +22,20 @@ from ..core.paths import (
 )
 from ..core.security import get_current_user
 from ..models import User
-from ..services.project_fs import list_project_dir, read_project_file, project_worktree
+from ..services.project_fs import (
+    list_project_dir, read_project_file, read_project_file_binary,
+    project_worktree,
+)
 from .projects import check_member
 
 router = APIRouter(prefix="/projects/{project_id}/writing", tags=["writing"])
+
+_IMAGE_MIME = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".png": "image/png", ".gif": "image/gif",
+    ".svg": "image/svg+xml", ".webp": "image/webp",
+    ".bmp": "image/bmp",
+}
 
 
 class WritingProjectIn(BaseModel):
@@ -38,6 +54,10 @@ class WritingProjectPatch(BaseModel):
 
 class WritingFilePatch(BaseModel):
     content: str
+
+
+class GitHubSyncRequest(BaseModel):
+    github_token: str = ""
 
 
 # ── LaTeX template strings ────────────────────────────────────────────────────
@@ -114,64 +134,41 @@ _GITIGNORE = "\n".join([
     "libertinusmath-regular.otf", "main.xdv", ".DS_Store",
 ]) + "\n"
 
-_PAPER_WRITING_SKILL = """---
-title: Paper writing core
-tags: [writing, latex]
----
-
-# Paper Writing Core
-
-Use this skill when editing this paper workspace.
-
-## Rules
-- Preserve the LaTeX project structure.
-- Edit `sections/*.tex` for manuscript content.
-- Keep `bibs/references.read_only.bib` read-only because it is Zotero managed.
-- Add uncertain AI-generated references to `bibs/ai_generated.bib`.
-- Use `\\aicite{key}` for AI-generated references until they are confirmed.
-"""
-
-_CITATION_SKILL = """---
-title: Citation management
-tags: [citations, zotero]
----
-
-# Citation Management
-
-Use this skill when adding or checking citations.
-
-## Rules
-- Prefer confirmed entries already in `bibs/references.read_only.bib`.
-- Put unconfirmed BibTeX entries in `bibs/ai_generated.bib`.
-- Do not edit `bibs/references.read_only.bib` directly.
-- After human confirmation, ResearchBuddy can move AI references into the trusted library.
-"""
-
 
 def _init_latex_structure(base: Path) -> None:
     (base / "sections").mkdir(exist_ok=True)
     (base / "images").mkdir(exist_ok=True)
     (base / "other").mkdir(exist_ok=True)
     (base / "bibs").mkdir(exist_ok=True)
-    (base / "skills" / "paper-writing-core").mkdir(parents=True, exist_ok=True)
-    (base / "skills" / "citation-management").mkdir(parents=True, exist_ok=True)
     (base / "main.tex").write_text(_MAIN_TEX, encoding="utf-8")
     (base / WRITING_REFS_BIB).write_text(_REFERENCE_BIB, encoding="utf-8")
     (base / WRITING_AI_BIB).write_text(_AI_BIB, encoding="utf-8")
     (base / "sections" / "introduction.tex").write_text(_INTRO_TEX, encoding="utf-8")
-    (base / "skills" / "paper-writing-core" / "SKILL.md").write_text(_PAPER_WRITING_SKILL, encoding="utf-8")
-    (base / "skills" / "citation-management" / "SKILL.md").write_text(_CITATION_SKILL, encoding="utf-8")
     (base / ".gitignore").write_text(_GITIGNORE, encoding="utf-8")
+    # Keep empty directories trackable
+    (base / "images" / ".gitkeep").touch()
+    (base / "other" / ".gitkeep").touch()
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _writing_files(project_id: str, writing_id: str) -> list[str]:
+    """Return relative file paths (from writing project root), excluding skills/."""
+    prefix = f"{WRITING_BASE}/{writing_id}/"
+    return [
+        path[len(prefix):]
+        for path in list_project_dir(project_id, f"{WRITING_BASE}/{writing_id}")
+        if not path[len(prefix):].startswith("skills/")
+    ]
+
+
+def _resolve_github_url(github_url: str, token: str) -> str:
+    if token and github_url.startswith("https://"):
+        return re.sub(r"^https://", f"https://{token}@", github_url)
+    return github_url
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
-
-def _writing_files(project_id: str, writing_id: str) -> list[str]:
-    return [
-        path for path in list_project_dir(project_id, f"{WRITING_BASE}/{writing_id}")
-        if not path.endswith(".gitkeep")
-    ]
-
 
 @router.get("")
 def list_writing_projects(
@@ -185,7 +182,6 @@ def list_writing_projects(
     for p in paths:
         if not p.endswith(f"/{WRITING_MANIFEST}"):
             continue
-        # Expected: writing/Project/{id}/manifest.read_only.json (4 parts)
         parts = p.split("/")
         if len(parts) != 4:
             continue
@@ -301,6 +297,29 @@ def get_writing_file(
         raise HTTPException(404)
 
 
+@router.get("/{writing_id}/image")
+def get_writing_image(
+    project_id: str,
+    writing_id: str,
+    path: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Serve a binary image file from the writing project."""
+    check_member(project_id, current_user, session)
+    if ".." in path or path.startswith("/"):
+        raise HTTPException(400, "Invalid path")
+    ext = Path(path).suffix.lower()
+    mime = _IMAGE_MIME.get(ext)
+    if not mime:
+        raise HTTPException(400, "Not a supported image type")
+    try:
+        data = read_project_file_binary(project_id, f"{WRITING_BASE}/{writing_id}/{path}")
+        return StreamingResponse(io.BytesIO(data), media_type=mime)
+    except FileNotFoundError:
+        raise HTTPException(404)
+
+
 @router.patch("/{writing_id}/file")
 def update_writing_file(
     project_id: str,
@@ -310,7 +329,7 @@ def update_writing_file(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Update a file in the writing project. AI notes only; bib protection enforced."""
+    """Update a file in the writing project. Bib protection enforced."""
     check_member(project_id, current_user, session, min_role="member")
     if ".." in path or path.startswith("/"):
         raise HTTPException(400, "Invalid path")
@@ -323,3 +342,130 @@ def update_writing_file(
             raise HTTPException(404)
         file.write_text(body.content, encoding="utf-8")
     return {"ok": True}
+
+
+@router.post("/{writing_id}/github-push")
+def github_push_writing(
+    project_id: str,
+    writing_id: str,
+    body: GitHubSyncRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Push the writing project files to the configured GitHub repo."""
+    check_member(project_id, current_user, session, min_role="member")
+    try:
+        content = read_project_file(project_id, f"{WRITING_BASE}/{writing_id}/{WRITING_MANIFEST}")
+        meta = json.loads(content)
+    except FileNotFoundError:
+        raise HTTPException(404)
+
+    github_url = meta.get("github_url", "").strip()
+    if not github_url:
+        raise HTTPException(400, "No GitHub URL configured for this writing project")
+
+    push_url = _resolve_github_url(github_url, body.github_token)
+    bare = settings.projects_dir / f"{project_id}.git"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+
+        # Clone main project to access writing project files
+        src_repo = git.Repo.clone_from(str(bare), str(tmpdir_path / "src"))
+        writing_dir = tmpdir_path / "src" / WRITING_BASE / writing_id
+
+        if not writing_dir.exists():
+            raise HTTPException(404, "Writing project directory not found")
+
+        # Build a fresh repo with just the writing project content
+        push_dir = tmpdir_path / "push"
+        push_dir.mkdir()
+
+        for item in writing_dir.rglob("*"):
+            if item.is_file():
+                rel = item.relative_to(writing_dir)
+                parts = rel.parts
+                if parts[0] == "skills":
+                    continue
+                if item.name in (".gitkeep", WRITING_MANIFEST):
+                    continue
+                dest = push_dir / rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dest)
+
+        push_repo = git.Repo.init(push_dir)
+        push_repo.git.checkout("-b", "main")
+        with push_repo.config_writer() as cw:
+            cw.set_value("user", "name", current_user.name or "ResearchBuddy")
+            cw.set_value("user", "email", current_user.email)
+
+        push_repo.git.add(A=True)
+        if push_repo.is_dirty(untracked_files=True):
+            push_repo.git.commit("-m", f"Sync: {meta.get('title', writing_id)}")
+        elif not push_repo.head.is_valid():
+            push_repo.git.commit("--allow-empty", "-m", f"Init: {meta.get('title', writing_id)}")
+
+        try:
+            result = subprocess.run(
+                ["git", "push", "--force", push_url, "HEAD:main"],
+                cwd=str(push_dir),
+                capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                raise HTTPException(500, f"GitHub push failed: {result.stderr or result.stdout}")
+        except subprocess.TimeoutExpired:
+            raise HTTPException(500, "GitHub push timed out")
+
+    return {"ok": True, "message": f"Pushed to {github_url}"}
+
+
+@router.post("/{writing_id}/github-pull")
+def github_pull_writing(
+    project_id: str,
+    writing_id: str,
+    body: GitHubSyncRequest,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Pull files from the configured GitHub repo into the writing project."""
+    check_member(project_id, current_user, session, min_role="member")
+    try:
+        content = read_project_file(project_id, f"{WRITING_BASE}/{writing_id}/{WRITING_MANIFEST}")
+        meta = json.loads(content)
+    except FileNotFoundError:
+        raise HTTPException(404)
+
+    github_url = meta.get("github_url", "").strip()
+    if not github_url:
+        raise HTTPException(400, "No GitHub URL configured for this writing project")
+
+    pull_url = _resolve_github_url(github_url, body.github_token)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmpdir_path = Path(tmpdir)
+        try:
+            git.Repo.clone_from(pull_url, str(tmpdir_path / "github"), depth=1)
+        except git.GitCommandError as e:
+            raise HTTPException(500, f"GitHub clone failed: {e}")
+
+        github_dir = tmpdir_path / "github"
+
+        with project_worktree(project_id) as wt:
+            wt.commit_message = f"Pull from GitHub: {meta.get('title', writing_id)}"
+            writing_path = wt / WRITING_BASE / writing_id
+
+            for item in github_dir.rglob("*"):
+                if item.is_file():
+                    rel = item.relative_to(github_dir)
+                    parts = rel.parts
+                    if parts[0] == ".git":
+                        continue
+                    if parts[0] == "skills":
+                        continue
+                    if str(rel) == WRITING_MANIFEST:
+                        continue
+                    dest = writing_path / rel
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(item, dest)
+
+    return {"ok": True, "message": f"Pulled from {github_url}"}

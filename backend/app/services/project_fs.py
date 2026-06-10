@@ -56,6 +56,16 @@ def read_project_file(project_id: str, rel_path: str) -> str:
         raise FileNotFoundError(rel_path)
 
 
+def read_project_file_binary(project_id: str, rel_path: str) -> bytes:
+    bare = settings.projects_dir / f"{project_id}.git"
+    repo = git.Repo(str(bare))
+    try:
+        blob = repo.head.commit.tree[rel_path]
+        return blob.data_stream.read()
+    except KeyError:
+        raise FileNotFoundError(rel_path)
+
+
 def list_project_dir(project_id: str, rel_dir: str) -> list[str]:
     bare = settings.projects_dir / f"{project_id}.git"
     repo = git.Repo(str(bare))
