@@ -11,12 +11,12 @@ import yaml
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from ..core.config import settings
 from ..core.db import get_session
 from ..core.security import get_current_user
-from ..models import User
+from ..models import User, Project, ProjectMember
 from ..services import skills_service as project_skills
 from .projects import check_member
 
@@ -48,6 +48,11 @@ class GlobalSkillDeleteIn(BaseModel):
 
 class ImportSkillIn(BaseModel):
     project_id: str
+    folder: str = ""
+
+
+class ImportMultiIn(BaseModel):
+    project_ids: list[str]
     folder: str = ""
 
 
@@ -205,22 +210,15 @@ async def upload_global_skill(
     if len(raw) > MAX_SKILL_BYTES:
         raise HTTPException(413, "File exceeds 10 MB limit")
     try:
-        extras: list[tuple[str, bytes]] = []
         if filename.endswith(".zip"):
-            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-                names = [name for name in zf.namelist() if not name.endswith("/")]
-                if "SKILL.md" not in names:
-                    raise HTTPException(400, "Zip must contain SKILL.md at the archive root")
-                content = zf.read("SKILL.md").decode("utf-8", errors="replace")
-                extras = [
-                    (name, zf.read(name))
-                    for name in names
-                    if name != "SKILL.md" and not name.startswith("/") and ".." not in Path(name).parts
-                ]
+            content, extra_files = project_skills._extract_zip_skill(raw)
         else:
             content = raw.decode("utf-8", errors="replace")
+            extra_files = []
     except zipfile.BadZipFile:
         raise HTTPException(400, "Invalid zip file")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
     post = frontmatter_lib.loads(content)
     meta = dict(post.metadata)
     meta.setdefault("created_by", current_user.name or current_user.email)
@@ -231,7 +229,7 @@ async def upload_global_skill(
     path = _path(skill_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
-    for name, payload in extras:
+    for name, payload in extra_files:
         target = path.parent / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(payload)
@@ -269,3 +267,89 @@ def import_global_skill(
         folder=body.folder,
     )
     return {"id": imported_id}
+
+
+@router.post("/{skill_id}/import-multi")
+def import_global_skill_multi(
+    skill_id: str,
+    body: ImportMultiIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Import a global skill into multiple projects at once."""
+    path = _path(skill_id)
+    if not path.exists():
+        raise HTTPException(404, "Skill not found")
+    content = path.read_text(encoding="utf-8")
+    results = []
+    for project_id in body.project_ids:
+        try:
+            check_member(project_id, current_user, session, min_role="member")
+            imported_id = project_skills.create_skill_from_content(
+                project_id,
+                filename_stem=skill_id,
+                content=content,
+                folder=body.folder,
+            )
+            results.append({"project_id": project_id, "ok": True, "id": imported_id})
+        except Exception as exc:
+            results.append({"project_id": project_id, "ok": False, "error": str(exc)})
+    return {"results": results}
+
+
+@router.get("/{skill_id}/project-status")
+def get_global_skill_project_status(
+    skill_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return which of the user's editable projects have this global skill imported."""
+    memberships = session.exec(
+        select(ProjectMember).where(
+            ProjectMember.user_id == current_user.id,
+            ProjectMember.role.in_(["member", "admin"]),
+        )
+    ).all()
+    result = []
+    for m in memberships:
+        project = session.get(Project, m.project_id)
+        if not project:
+            continue
+        try:
+            project_skills.get_skill(str(project.id), skill_id)
+            is_imported = True
+        except Exception:
+            is_imported = False
+        result.append({
+            "project_id": str(project.id),
+            "project_name": project.name,
+            "role": m.role,
+            "is_imported": is_imported,
+        })
+    return result
+
+
+@router.post("/{skill_id}/sync")
+def sync_global_skill_to_project(
+    skill_id: str,
+    body: ImportSkillIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Overwrite a project's imported copy with the latest global version."""
+    check_member(body.project_id, current_user, session, min_role="member")
+    path = _path(skill_id)
+    if not path.exists():
+        raise HTTPException(404, "Global skill not found")
+    try:
+        project_skills.get_skill(body.project_id, skill_id)
+    except FileNotFoundError:
+        raise HTTPException(404, "This skill hasn't been imported to the project yet; use Import instead.")
+    global_content = path.read_text(encoding="utf-8")
+    project_skills.create_skill_from_content(
+        body.project_id,
+        filename_stem=skill_id,
+        content=global_content,
+        folder=body.folder,
+    )
+    return {"ok": True}

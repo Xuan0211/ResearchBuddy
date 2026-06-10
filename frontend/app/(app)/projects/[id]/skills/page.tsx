@@ -3,7 +3,10 @@ import { useEffect, useRef, useState } from "react"
 import { useParams } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { Archive, Download, Edit2, FileUp, FolderOpen, Plus, Save, Tag, Trash2, Upload, X } from "lucide-react"
+import {
+  AlertTriangle, Archive, Download, Edit2, FileUp, FolderOpen,
+  Plus, Save, Tag, Trash2, Upload, X,
+} from "lucide-react"
 import { api } from "@/lib/api"
 import type { ProjectSkill } from "@/lib/types"
 import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
@@ -110,11 +113,113 @@ const SECTION_LABELS: Record<string, string> = {
   papers: "Papers",
   meetings: "Meetings",
   docs: "Docs",
+  document: "Docs",
   writing: "Writing",
   coding: "Coding",
   workspace: "Workspace",
   images: "Images",
   prototype: "Prototype",
+  skills: "Skills",
+}
+
+// ── Upload dialog ─────────────────────────────────────────────────────────────
+
+function UploadDialog({ onClose, onUpload }: { onClose: () => void; onUpload: (f: File) => void }) {
+  const innerRef = useRef<HTMLInputElement>(null)
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-md rounded-xl border bg-white p-6 shadow-xl">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold">Upload Skill</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-black"><X size={16} /></button>
+        </div>
+        <div className="space-y-3 text-sm text-gray-600">
+          <p>You can upload a skill as:</p>
+          <ul className="space-y-2 text-xs">
+            <li className="rounded-md border bg-gray-50 px-3 py-2">
+              <span className="font-medium text-gray-800">.md file</span>
+              <p className="mt-0.5 text-gray-500">A single Markdown file. Frontmatter fields like <code className="bg-gray-100 px-1 rounded">title</code>, <code className="bg-gray-100 px-1 rounded">tags</code> are read automatically.</p>
+            </li>
+            <li className="rounded-md border bg-gray-50 px-3 py-2">
+              <span className="font-medium text-gray-800">.zip archive</span>
+              <p className="mt-0.5 text-gray-500">Must contain <code className="bg-gray-100 px-1 rounded">SKILL.md</code> at the root <em>or</em> inside a single top-level folder (e.g. <code className="bg-gray-100 px-1 rounded">my-skill/SKILL.md</code>). Extra assets are preserved alongside the skill.</p>
+            </li>
+          </ul>
+        </div>
+        <div className="mt-5 flex gap-2">
+          <button
+            onClick={() => innerRef.current?.click()}
+            className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-black px-4 py-2 text-sm font-medium text-white"
+          >
+            <FileUp size={14} /> Choose file
+          </button>
+          <button onClick={onClose} className="rounded-lg border px-4 py-2 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+        </div>
+        <input
+          ref={innerRef}
+          type="file"
+          accept=".md,.zip"
+          className="hidden"
+          onChange={e => {
+            const f = e.target.files?.[0]
+            if (f) { onUpload(f); onClose() }
+          }}
+        />
+      </div>
+    </div>
+  )
+}
+
+// ── Delete confirmation dialog ────────────────────────────────────────────────
+
+function DeleteDialog({
+  skill,
+  attachments,
+  onConfirm,
+  onCancel,
+  deleting,
+}: {
+  skill: ProjectSkill
+  attachments: string[]
+  onConfirm: () => void
+  onCancel: () => void
+  deleting: boolean
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+      <div className="w-full max-w-sm rounded-xl border bg-white p-6 shadow-xl">
+        <div className="flex items-start gap-3 mb-4">
+          <AlertTriangle size={18} className="text-red-500 mt-0.5 shrink-0" />
+          <div>
+            <h3 className="text-sm font-semibold">Delete &ldquo;{skill.title}&rdquo;?</h3>
+            {attachments.length > 0 ? (
+              <p className="mt-1 text-xs text-gray-600">
+                This skill is currently attached to the following modules and will be removed from them:
+              </p>
+            ) : (
+              <p className="mt-1 text-xs text-gray-500">This skill is not attached to any module.</p>
+            )}
+          </div>
+        </div>
+        {attachments.length > 0 && (
+          <div className="mb-4 flex flex-wrap gap-1 pl-7">
+            {attachments.map(sec => (
+              <span key={sec} className="rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700">
+                {SECTION_LABELS[sec] ?? sec}
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 justify-end">
+          <button onClick={onCancel} className="rounded-lg border px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50">Cancel</button>
+          <button onClick={onConfirm} disabled={deleting}
+            className="rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50">
+            {deleting ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -135,8 +240,12 @@ export default function SkillsPage() {
   const [newTags, setNewTags] = useState("")
   const [newFolder, setNewFolder] = useState("")
   const [newSections, setNewSections] = useState<string[]>([])
-  const [templateIdx, setTemplateIdx] = useState(3) // default: Blank
+  const [templateIdx, setTemplateIdx] = useState(3)
   const [filter, setFilter] = useState<string>("all")
+  const [showUploadDialog, setShowUploadDialog] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<ProjectSkill | null>(null)
+  const [deleteAttachments, setDeleteAttachments] = useState<string[]>([])
+  const [deleting, setDeleting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   async function load() {
@@ -170,11 +279,30 @@ export default function SkillsPage() {
     } finally { setSaving(false) }
   }
 
-  async function deleteSkill(skill: ProjectSkill) {
-    if (!confirm(`Delete "${skill.title}"?`)) return
-    await api.delete(`/api/projects/${projectId}/skills/${skill.id}`)
-    if (selected?.id === skill.id) setSelected(null)
-    await load()
+  async function initiateDelete(skill: ProjectSkill) {
+    // First fetch attachments, then show confirmation dialog
+    try {
+      const res = await api.get<{ sections: string[] }>(`/api/projects/${projectId}/skills/${skill.id}/attachments`)
+      setDeleteAttachments(res.sections)
+    } catch {
+      setDeleteAttachments([])
+    }
+    setDeleteTarget(skill)
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    try {
+      await api.delete(`/api/projects/${projectId}/skills/${deleteTarget.id}`)
+      if (selected?.id === deleteTarget.id) setSelected(null)
+      setDeleteTarget(null)
+      await load()
+    } catch (e: unknown) {
+      alert("Delete failed: " + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setDeleting(false)
+    }
   }
 
   async function createSkill(e: React.FormEvent) {
@@ -195,11 +323,8 @@ export default function SkillsPage() {
     await load()
   }
 
-  async function uploadFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
+  async function doUploadFile(file: File) {
     if (file.size > MAX_MB * 1024 * 1024) { alert(`File exceeds ${MAX_MB} MB`); return }
-    if (!file.name.endsWith(".md") && !file.name.endsWith(".zip")) { alert("Only .md or .zip files supported"); return }
     const form = new FormData()
     form.append("file", file)
     const token = localStorage.getItem("rb_token") ?? ""
@@ -208,7 +333,6 @@ export default function SkillsPage() {
     })
     if (!res.ok) { alert("Upload failed: " + (await res.text())); return }
     const uploaded = await res.json()
-    e.target.value = ""
     await load()
     if (uploaded.id) {
       const full = await api.get<ProjectSkill>(`/api/projects/${projectId}/skills/${uploaded.id}`)
@@ -223,13 +347,12 @@ export default function SkillsPage() {
 
   function downloadSkill(skill: ProjectSkill) {
     const token = localStorage.getItem("rb_token") ?? ""
-    const a = document.createElement("a")
-    a.href = `${BASE}/api/projects/${projectId}/skills/${skill.id}/download`
-    // Attach token via query param won't work for bearer auth — open in same tab
-    // Instead, fetch and create blob
-    fetch(a.href, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${BASE}/api/projects/${projectId}/skills/${skill.id}/download`, {
+      headers: { Authorization: `Bearer ${token}` }
+    })
       .then(r => r.blob())
       .then(blob => {
+        const a = document.createElement("a")
         a.href = URL.createObjectURL(blob)
         a.download = `${skill.id}.md`
         a.click()
@@ -265,13 +388,32 @@ export default function SkillsPage() {
   })
 
   const displayed = filter === "all"
-    ? skills.filter(s => !((s as any).sections?.length))   // ungrouped in "all"
+    ? skills.filter(s => !((s as any).sections?.length))
     : (grouped[filter] ?? [])
 
   const allInFilter = filter === "all" ? skills : (grouped[filter] ?? [])
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-white">
+      {/* Upload dialog */}
+      {showUploadDialog && (
+        <UploadDialog
+          onClose={() => setShowUploadDialog(false)}
+          onUpload={doUploadFile}
+        />
+      )}
+
+      {/* Delete confirmation dialog */}
+      {deleteTarget && (
+        <DeleteDialog
+          skill={deleteTarget}
+          attachments={deleteAttachments}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+          deleting={deleting}
+        />
+      )}
+
       <div className="border-b bg-white px-6 py-4 space-y-3 flex-shrink-0">
         <h3 className="text-sm font-semibold">Skills</h3>
         <ModuleResourcesPanel projectId={projectId} section="skills" canEdit={true} />
@@ -287,7 +429,7 @@ export default function SkillsPage() {
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">Skills</h3>
             <div className="flex gap-1">
-              <button onClick={() => fileRef.current?.click()} title="Upload .md or .zip"
+              <button onClick={() => setShowUploadDialog(true)} title="Upload .md or .zip"
                 className="p-1.5 rounded-lg text-gray-400 hover:text-black hover:bg-gray-100">
                 <FileUp size={14} />
               </button>
@@ -301,7 +443,9 @@ export default function SkillsPage() {
               </button>
             </div>
           </div>
-          <input ref={fileRef} type="file" accept=".md,.zip" className="hidden" onChange={uploadFile} />
+          {/* hidden real input kept for compatibility */}
+          <input ref={fileRef} type="file" accept=".md,.zip" className="hidden"
+            onChange={e => { const f = e.target.files?.[0]; if (f) doUploadFile(f); e.target.value = "" }} />
 
           {/* Section filter tabs */}
           <div className="flex flex-wrap gap-1">
@@ -347,7 +491,7 @@ export default function SkillsPage() {
                   {skill.created_by && <p className={`text-[10px] mt-0.5 ${selected?.id === skill.id ? "text-gray-300" : "text-gray-400"}`}>By {skill.created_by}</p>}
                   </div>
                   <button
-                    onClick={e => { e.stopPropagation(); deleteSkill(skill) }}
+                    onClick={e => { e.stopPropagation(); initiateDelete(skill) }}
                     className={`p-0.5 opacity-0 group-hover:opacity-100 rounded ${selected?.id === skill.id ? "text-gray-300 hover:text-red-300" : "text-gray-400 hover:text-red-500"}`}>
                     <Trash2 size={11} />
                   </button>
@@ -364,9 +508,9 @@ export default function SkillsPage() {
                   </div>
                 )}
                 {/* Attached sections */}
-                {((skill as any).attached_sections?.length > 0) && (
+                {(skill.attached_sections?.length ?? 0) > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
-                    {((skill as any).attached_sections as string[]).map(sec => (
+                    {(skill.attached_sections as string[]).map(sec => (
                       <span key={sec}
                         className={`px-1.5 py-0 rounded-full text-[10px] font-medium ${selected?.id === skill.id ? "bg-white/30 text-white" : "bg-blue-50 text-blue-600"}`}>
                         {SECTION_LABELS[sec] ?? sec}
@@ -524,7 +668,7 @@ export default function SkillsPage() {
                 className="inline-flex items-center gap-1.5 text-xs bg-black text-white px-3 py-2 rounded-lg">
                 <Plus size={12} /> New skill
               </button>
-              <button onClick={() => fileRef.current?.click()}
+              <button onClick={() => setShowUploadDialog(true)}
                 className="inline-flex items-center gap-1.5 text-xs border rounded-lg px-3 py-2 text-gray-600 hover:bg-gray-50">
                 <Upload size={12} /> Upload
               </button>

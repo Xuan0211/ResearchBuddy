@@ -107,7 +107,19 @@ def update_skill(
 
 # ── Delete ────────────────────────────────────────────────────────────────────
 
-@router.delete("/{skill_id}", status_code=204)
+@router.get("/{skill_id}/attachments")
+def get_skill_attachments(
+    project_id: str,
+    skill_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return which module sections currently have this skill attached."""
+    check_member(project_id, current_user, session)
+    return {"sections": skills.get_skill_attachments(project_id, skill_id)}
+
+
+@router.delete("/{skill_id}")
 def delete_project_skill(
     project_id: str,
     skill_id: str,
@@ -116,7 +128,8 @@ def delete_project_skill(
 ):
     check_member(project_id, current_user, session, min_role="member")
     try:
-        skills.delete_skill(project_id, skill_id)
+        cleaned = skills.delete_skill(project_id, skill_id)
+        return {"ok": True, "cleaned_sections": cleaned}
     except FileNotFoundError:
         raise HTTPException(404, "Skill not found")
 

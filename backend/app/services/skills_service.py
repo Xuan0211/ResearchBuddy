@@ -1,6 +1,7 @@
 """Project skill discovery and management."""
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import zipfile
@@ -14,6 +15,9 @@ from . import frontmatter as fm
 from .project_fs import list_project_dir, project_worktree, read_project_file
 
 SKILLS_ROOT = "skills"
+
+# All sections that can have skills.json attachments
+_SKILL_SECTIONS = ["papers", "meetings", "coding", "writing", "document", "images", "prototype", "skills"]
 
 
 def slugify(value: str) -> str:
@@ -80,17 +84,41 @@ def _parse_skill(project_id: str, path: str, include_content: bool = False) -> d
 
 
 def _build_attachment_map(project_id: str) -> dict[str, list[str]]:
-    """Return {skill_id: [section, ...]} from writing project skills."""
-    from ..core.paths import WRITING_BASE
+    """Return {skill_id: [section, ...]} by scanning all module skills.json files."""
     attachment: dict[str, list[str]] = {}
-    # In v2, only writing projects have per-project skills/ dirs
-    # e.g. writing/Project/{id}/skills/{skill_id}/SKILL.md
-    for path in list_project_dir(project_id, WRITING_BASE):
-        parts = path.split("/")
-        if len(parts) >= 5 and parts[3] == "skills" and path.endswith(".md") and not path.endswith(".gitkeep"):
-            sid = parts[-2] if path.endswith("/SKILL.md") else Path(path).stem
-            attachment.setdefault(sid, []).append("writing")
+    for section in _SKILL_SECTIONS:
+        try:
+            content = read_project_file(project_id, f"{section}/skills.json")
+            data = json.loads(content)
+            for item in data.get("items", []):
+                if isinstance(item, dict) and item.get("id"):
+                    sid = str(item["id"])
+                    if section not in attachment.get(sid, []):
+                        attachment.setdefault(sid, []).append(section)
+        except Exception:
+            pass
+    # Also scan scoped writing projects: writing/Project/*/skills.json
+    try:
+        for path in list_project_dir(project_id, "writing/Project"):
+            if path.endswith("/skills.json"):
+                try:
+                    content = read_project_file(project_id, path)
+                    data = json.loads(content)
+                    for item in data.get("items", []):
+                        if isinstance(item, dict) and item.get("id"):
+                            sid = str(item["id"])
+                            if "writing" not in attachment.get(sid, []):
+                                attachment.setdefault(sid, []).append("writing")
+                except Exception:
+                    pass
+    except Exception:
+        pass
     return attachment
+
+
+def get_skill_attachments(project_id: str, skill_id: str) -> list[str]:
+    """Return list of section names where this skill is currently attached."""
+    return _build_attachment_map(project_id).get(skill_id, [])
 
 
 def list_skills(project_id: str) -> list[dict[str, Any]]:
@@ -231,6 +259,51 @@ def create_skill_from_content(
     return skill_id
 
 
+def _extract_zip_skill(raw: bytes) -> tuple[str, list[tuple[str, bytes]]]:
+    """Extract SKILL.md content + extra files from a zip.
+
+    Handles two layouts:
+    - Flat root: SKILL.md at the top level
+    - Single folder: folder/SKILL.md (typical macOS zip-a-folder behaviour)
+
+    Returns (skill_md_content, [(relative_path, bytes), ...]) for extra files.
+    """
+    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+        # Filter out macOS __MACOSX artefacts and directory entries
+        names = [
+            n for n in zf.namelist()
+            if not n.endswith("/") and not n.startswith("__MACOSX") and ".." not in Path(n).parts
+        ]
+        # 1. Try exact root
+        root_skill = next((n for n in names if n == "SKILL.md"), "")
+        prefix = ""
+
+        if not root_skill:
+            # 2. Try single top-level folder containing SKILL.md
+            top_dirs = {n.split("/")[0] for n in names if "/" in n}
+            if len(top_dirs) == 1:
+                candidate = f"{top_dirs.pop()}/SKILL.md"
+                if candidate in names:
+                    root_skill = candidate
+                    prefix = root_skill.rsplit("/", 1)[0] + "/"
+
+        if not root_skill:
+            raise ValueError(
+                "Zip must contain SKILL.md at the archive root, or inside a single top-level folder "
+                "(e.g. my-skill/SKILL.md)."
+            )
+
+        content = zf.read(root_skill).decode("utf-8", errors="replace")
+        extras: list[tuple[str, bytes]] = []
+        for name in names:
+            if name == root_skill:
+                continue
+            rel = name[len(prefix):] if prefix and name.startswith(prefix) else name
+            if rel:
+                extras.append((rel, zf.read(name)))
+    return content, extras
+
+
 def create_skill_from_zip(
     project_id: str,
     raw: bytes,
@@ -242,17 +315,7 @@ def create_skill_from_zip(
     created_by: str = "",
     creator_email: str = "",
 ) -> str:
-    with zipfile.ZipFile(io.BytesIO(raw)) as zf:
-        names = [name for name in zf.namelist() if not name.endswith("/")]
-        root_skill = next((name for name in names if name == "SKILL.md"), "")
-        if not root_skill:
-            raise ValueError("Zip must contain SKILL.md at the archive root")
-        content = zf.read(root_skill).decode("utf-8", errors="replace")
-        extra_files = [
-            name for name in names
-            if name != "SKILL.md" and not name.startswith("/") and ".." not in Path(name).parts
-        ]
-        extras = [(name, zf.read(name)) for name in extra_files]
+    content, extra_files = _extract_zip_skill(raw)
     skill_id = create_skill_from_content(
         project_id,
         filename_stem=filename_stem,
@@ -266,10 +329,10 @@ def create_skill_from_zip(
     )
     skill = get_skill(project_id, skill_id)
     base = Path(skill["path"]).parent
-    if extras:
+    if extra_files:
         with project_worktree(project_id) as wt:
             wt.commit_message = f"Extract skill package: {skill_id}"
-            for name, payload in extras:
+            for name, payload in extra_files:
                 target = wt / base / name
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(payload)
@@ -315,11 +378,50 @@ def update_skill(
         file.write_text(f"---\n{front}\n---\n{new_body}", encoding="utf-8")
 
 
-def delete_skill(project_id: str, skill_id: str) -> None:
+def _all_skills_json_paths(project_id: str) -> list[str]:
+    """Return all skills.json relative paths found across all sections."""
+    paths = []
+    for section in _SKILL_SECTIONS:
+        paths.append(f"{section}/skills.json")
+    try:
+        for p in list_project_dir(project_id, "writing/Project"):
+            if p.endswith("/skills.json"):
+                paths.append(p)
+    except Exception:
+        pass
+    return paths
+
+
+def delete_skill(project_id: str, skill_id: str) -> list[str]:
+    """Delete a skill and remove it from all module skills.json files.
+
+    Returns the list of section names that had this skill attached.
+    """
     skill = get_skill(project_id, skill_id)
     path = Path(skill["path"])
+    cleaned: list[str] = []
+
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Delete skill: {skill_id}"
+        # 1. Clean up all skills.json references
+        for skills_json_rel in _all_skills_json_paths(project_id):
+            json_path = wt / skills_json_rel
+            if not json_path.exists():
+                continue
+            try:
+                data = json.loads(json_path.read_text(encoding="utf-8"))
+                items = data.get("items", [])
+                filtered = [i for i in items if isinstance(i, dict) and str(i.get("id")) != skill_id]
+                if len(filtered) != len(items):
+                    data["items"] = filtered
+                    json_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+                    # Derive a human-friendly section name
+                    section = skills_json_rel.split("/")[0]
+                    if section not in cleaned:
+                        cleaned.append(section)
+            except Exception:
+                pass
+        # 2. Delete the skill file/folder
         target = wt / str(path)
         if not target.exists():
             raise FileNotFoundError(skill_id)
@@ -327,3 +429,5 @@ def delete_skill(project_id: str, skill_id: str) -> None:
             shutil.rmtree(target.parent)
         else:
             target.unlink()
+
+    return cleaned
