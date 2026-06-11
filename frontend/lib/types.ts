@@ -41,6 +41,8 @@ export interface Meeting {
   tabs?: DocumentTab[]
   _body?: string
   _path?: string
+  /** Present when the meeting file has format errors. The meeting cannot be opened until fixed. */
+  _validation_errors?: string[]
 }
 
 export interface Contact {

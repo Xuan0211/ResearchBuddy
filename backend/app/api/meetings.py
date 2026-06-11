@@ -367,6 +367,39 @@ def update_meeting_settings(
     return body.model_dump()
 
 
+def _validate_meeting_meta(meta: dict) -> list[str]:
+    """Return a list of human-readable errors for a parsed meeting dict.
+
+    An empty list means the file is valid.
+    """
+    errors: list[str] = []
+    mtg_id = meta.get("id") or ""
+    path = meta.get("_path") or ""
+    filename_stem = path.rsplit("/", 1)[-1][:-3] if path.endswith(".md") else ""
+
+    if not mtg_id:
+        errors.append(
+            "Missing `id:` in YAML frontmatter. "
+            f"Add `id: \"{filename_stem}\"` (must match the filename without .md)."
+        )
+    elif filename_stem and mtg_id != filename_stem:
+        errors.append(
+            f"`id: \"{mtg_id}\"` does not match filename `{filename_stem}.md`. "
+            "The id field must equal the filename without the .md extension."
+        )
+
+    if not meta.get("date"):
+        errors.append("Missing `date:` in YAML frontmatter. Add `date: \"YYYY-MM-DD\"`.")
+
+    if not meta.get("title"):
+        errors.append("Missing `title:` in YAML frontmatter. Add `title: \"Your Meeting Title\"`.")
+
+    if not errors and not meta.get("document_type"):
+        errors.append("Missing `document_type: meeting` in YAML frontmatter.")
+
+    return errors
+
+
 @router.get("")
 def list_meetings(
     project_id: str,
@@ -380,9 +413,16 @@ def list_meetings(
         parts = p.split("/")
         if not p.endswith(".md") or len(parts) != 3:
             continue
+        # Skip documentation / README files — they are not meeting records
+        if parts[-1].lower() == "readme.md":
+            continue
         try:
             m = _parse_meeting(project_id, p)
-            meetings.append(_meeting_public(m))
+            public = _meeting_public(m)
+            errors = _validate_meeting_meta({**m, "_path": p})
+            if errors:
+                public["_validation_errors"] = errors
+            meetings.append(public)
         except Exception:
             continue
 

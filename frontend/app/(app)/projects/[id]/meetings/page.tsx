@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, MapPin, Pencil, Plus, RefreshCw, Trash2, Users, X } from "lucide-react"
+import { AlertTriangle, BookOpen, CalendarPlus, ChevronDown, ChevronRight, Download, ExternalLink, MapPin, Pencil, Plus, RefreshCw, Trash2, Users, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Contact, Meeting, MeetingSettings } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
@@ -511,48 +511,79 @@ export default function MeetingsPage() {
           <div className="absolute left-[7px] top-3 bottom-3 w-px bg-gray-200" />
           <ul className="space-y-0">
             {meetings.map((m, idx) => {
-              const isLast = idx === meetings.length - 1
+              const isInvalid = !!(m._validation_errors?.length)
               const timeStr = [m.start_time, m.end_time].filter(Boolean).join("–")
               const meta = [timeStr, m.location].filter(Boolean).join(" · ")
               const attendeeStr = m.attendees?.length
                 ? m.attendees.slice(0, 4).join(", ") + (m.attendees.length > 4 ? ` +${m.attendees.length - 4}` : "")
                 : ""
               return (
-                <li key={m.id} className="relative flex gap-4 pb-5">
+                <li key={m._path ?? m.id ?? idx} className="relative flex gap-4 pb-5">
                   {/* dot */}
                   <div className="relative flex-shrink-0 mt-2.5">
-                    <div className="w-3.5 h-3.5 rounded-full bg-white border-2 border-gray-300 z-10 relative" />
+                    <div className={`w-3.5 h-3.5 rounded-full bg-white border-2 z-10 relative ${isInvalid ? "border-amber-400" : "border-gray-300"}`} />
                   </div>
-                  {/* card */}
-                  <div
-                    className="flex-1 border border-gray-100 rounded-xl px-4 py-3 bg-white shadow-sm hover:border-gray-200 hover:shadow cursor-pointer transition-all"
-                    onClick={() => router.push(`/projects/${projectId}/meetings/${m.id}`)}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-[11px] font-mono text-gray-400">{m.date}</span>
-                        </div>
-                        <p className="font-medium text-sm truncate">{m.title}</p>
-                        {(meta || attendeeStr) && (
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {[meta, attendeeStr].filter(Boolean).join(" · ")}
+
+                  {isInvalid ? (
+                    /* ── Invalid / malformed meeting file ── */
+                    <div className="flex-1 border border-amber-200 rounded-xl px-4 py-3 bg-amber-50">
+                      <div className="flex items-start gap-2">
+                        <AlertTriangle size={14} className="text-amber-500 mt-0.5 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-mono text-amber-700 truncate">{m._path ?? "unknown path"}</p>
+                          <p className="text-xs font-semibold text-amber-800 mt-0.5">Invalid meeting file — cannot be opened</p>
+                          <ul className="mt-1.5 space-y-0.5">
+                            {m._validation_errors!.map((err, i) => (
+                              <li key={i} className="text-[11px] text-amber-700">• {err}</li>
+                            ))}
+                          </ul>
+                          <p className="text-[11px] text-amber-600 mt-2">
+                            Fix the file, then refer to{" "}
+                            <code className="font-mono bg-amber-100 px-0.5 rounded text-[10px]">meetings/mygdocs/README.md</code>{" "}
+                            for the correct format.
                           </p>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                        <DriveSyncControls projectId={projectId} resource="meetings" itemId={m.id} />
-                        {m.links?.outlook_calendar && (
-                          <a href={m.links.outlook_calendar} target="_blank" rel="noreferrer"
-                            className="text-xs text-blue-500 hover:text-blue-700">
-                            <ExternalLink size={12} />
-                          </a>
-                        )}
-                        <button onClick={() => downloadIcs(m)} className="text-gray-300 hover:text-gray-600 p-1"><Download size={12} /></button>
-                        <button onClick={() => deleteMeeting(m)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={12} /></button>
+                        </div>
+                        <button
+                          onClick={() => deleteMeeting(m)}
+                          className="text-amber-300 hover:text-red-500 p-1 flex-shrink-0"
+                          title="Delete this file"
+                        >
+                          <Trash2 size={12} />
+                        </button>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    /* ── Normal valid meeting card ── */
+                    <div
+                      className="flex-1 border border-gray-100 rounded-xl px-4 py-3 bg-white shadow-sm hover:border-gray-200 hover:shadow cursor-pointer transition-all"
+                      onClick={() => router.push(`/projects/${projectId}/meetings/${m.id}`)}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="text-[11px] font-mono text-gray-400">{m.date}</span>
+                          </div>
+                          <p className="font-medium text-sm truncate">{m.title}</p>
+                          {(meta || attendeeStr) && (
+                            <p className="text-xs text-gray-400 mt-0.5">
+                              {[meta, attendeeStr].filter(Boolean).join(" · ")}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
+                          <DriveSyncControls projectId={projectId} resource="meetings" itemId={m.id} />
+                          {m.links?.outlook_calendar && (
+                            <a href={m.links.outlook_calendar} target="_blank" rel="noreferrer"
+                              className="text-xs text-blue-500 hover:text-blue-700">
+                              <ExternalLink size={12} />
+                            </a>
+                          )}
+                          <button onClick={() => downloadIcs(m)} className="text-gray-300 hover:text-gray-600 p-1"><Download size={12} /></button>
+                          <button onClick={() => deleteMeeting(m)} className="text-gray-300 hover:text-red-500 p-1"><Trash2 size={12} /></button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </li>
               )
             })}
