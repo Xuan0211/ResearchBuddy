@@ -17,7 +17,7 @@ from .project_fs import list_project_dir, project_worktree, read_project_file
 SKILLS_ROOT = "skills"
 
 # All sections that can have skills.json attachments
-_SKILL_SECTIONS = ["papers", "meetings", "coding", "writing", "document", "images", "prototype", "skills"]
+_SKILL_SECTIONS = ["papers", "meetings", "coding", "writing", "document", "design", "prototype", "skills"]
 
 
 def slugify(value: str) -> str:

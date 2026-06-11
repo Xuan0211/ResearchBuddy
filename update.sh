@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SERVER="ubuntu@43.156.12.203"
+SERVER="ubuntu@43.163.8.22"
 APP_DIR="/home/ubuntu/researchbuddy"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -30,4 +30,4 @@ echo "▶ [2/2] 重新构建并重启服务..."
 ssh "$SERVER" "cd $APP_DIR && sudo docker compose -f docker-compose.prod.yml up -d --build"
 
 echo ""
-echo "✓ 更新完成: https://research.hopeyuanxu.com"
+echo "✓ 更新完成: https://research.arklab-hkustgz.com"

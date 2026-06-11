@@ -16,10 +16,20 @@ services:
     build: ./backend
     environment:
       - SECRET_KEY=${SECRET_KEY}
-      - FRONTEND_URL=https://research.hopeyuanxu.com
+      - FRONTEND_URL=https://research.arklab-hkustgz.com
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-465}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-ResearchBuddy}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-true}
+      - IMAP_HOST=${IMAP_HOST}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - FEEDBACK_NOTIFICATION_EMAIL=${FEEDBACK_NOTIFICATION_EMAIL}
       - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
       - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
-      - GOOGLE_REDIRECT_URI=https://research.hopeyuanxu.com/api/auth/google-drive/callback
+      - GOOGLE_REDIRECT_URI=https://research.arklab-hkustgz.com/api/auth/google-drive/callback
     volumes:
       - ./backend/db.sqlite3:/backend/db.sqlite3
       - ./backend/projects:/backend/projects
@@ -32,7 +42,7 @@ services:
     build:
       context: ./frontend
       args:
-        - NEXT_PUBLIC_API_URL=https://research.hopeyuanxu.com
+        - NEXT_PUBLIC_API_URL=https://research.arklab-hkustgz.com
     environment:
-      - NEXT_PUBLIC_API_URL=https://research.hopeyuanxu.com
+      - NEXT_PUBLIC_API_URL=https://research.arklab-hkustgz.com
     restart: unless-stopped

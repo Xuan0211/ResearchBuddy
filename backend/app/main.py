@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings
 from .core.db import init_db
-from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync, todos, global_skills
+from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync, todos, global_skills, feedback
 import pathlib
 
 scheduler = AsyncIOScheduler()
@@ -58,6 +58,10 @@ app.add_middleware(
 
 app.mount("/api/images", StaticFiles(directory=str(settings.images_dir)), name="images")
 
+_help_images_dir = pathlib.Path(__file__).parent.parent.parent / "docs" / "images"
+if _help_images_dir.exists():
+    app.mount("/api/help-images", StaticFiles(directory=str(_help_images_dir)), name="help-images")
+
 app.include_router(auth.router, prefix="/api")
 app.include_router(todos.router, prefix="/api")
 app.include_router(projects.router, prefix="/api")
@@ -71,6 +75,7 @@ app.include_router(codebooks.router, prefix="/api")
 app.include_router(media.router, prefix="/api")
 app.include_router(skills.router, prefix="/api")
 app.include_router(global_skills.router, prefix="/api")
+app.include_router(feedback.router, prefix="/api")
 app.include_router(section_resources.router, prefix="/api")
 app.include_router(writing.router, prefix="/api")
 app.include_router(gantt.router, prefix="/api")
@@ -82,15 +87,34 @@ def health():
     return {"status": "ok", "app": settings.app_name}
 
 
+import re as _re_module
+
+def _strip_order_prefix(name: str) -> str:
+    """Strip leading numeric sort prefix like '01-', '02-' from filenames/dirnames."""
+    return _re_module.sub(r"^\d+-", "", name)
+
+
+def _dir_display_title(dirname: str) -> str:
+    """Human-readable title for a directory: strip order prefix, title-case."""
+    return _strip_order_prefix(dirname).replace("-", " ").title()
+
+
 def _scan_docs_tree(directory: pathlib.Path, base: pathlib.Path) -> list[dict]:
-    """Recursively scan docs/ and return a nested tree of {type, name, title, path, children}."""
+    """Recursively scan docs/ and return a nested tree of {type, name, title, path, children}.
+    Files/dirs named with leading numbers (01-, 02-) are sorted by that prefix and
+    the prefix is stripped from the display title.
+    """
     import frontmatter as _fm
     items: list[dict] = []
     try:
-        entries = sorted(directory.iterdir(), key=lambda p: (p.is_dir(), p.name))
+        # Sort dirs before files; within each group sort by filename (numeric prefix sorts correctly)
+        entries = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name))
     except PermissionError:
         return []
     for entry in entries:
+        # Skip hidden files and README (shown inline by parent dir)
+        if entry.name.startswith(".") or entry.name.startswith("_"):
+            continue
         rel = entry.relative_to(base)
         if entry.is_dir():
             children = _scan_docs_tree(entry, base)
@@ -98,54 +122,60 @@ def _scan_docs_tree(directory: pathlib.Path, base: pathlib.Path) -> list[dict]:
                 items.append({
                     "type": "dir",
                     "name": entry.name,
-                    "title": entry.name.replace("-", " ").title(),
+                    "title": _dir_display_title(entry.name),
                     "path": str(rel),
                     "children": children,
                 })
         elif entry.suffix == ".md":
+            stem = entry.stem
+            display_stem = _strip_order_prefix(stem)
             try:
                 post = _fm.loads(entry.read_text(encoding="utf-8"))
-                title = post.metadata.get("title") or entry.stem.replace("-", " ").title()
+                title = post.metadata.get("title") or display_stem.replace("-", " ").title()
+                body = post.content  # content without frontmatter
             except Exception:
-                title = entry.stem.replace("-", " ").title()
+                title = display_stem.replace("-", " ").title()
+                body = entry.read_text(encoding="utf-8")
             doc_path = str(rel)[:-3]  # strip .md
-            items.append({"type": "doc", "name": entry.stem, "title": title, "path": doc_path})
+            items.append({
+                "type": "doc",
+                "name": stem,
+                "title": title,
+                "path": doc_path,
+                "display_name": display_stem,
+            })
     return items
+
+
+def _first_doc_path(tree: list) -> str | None:
+    """Return the path of the first doc in the tree (depth-first)."""
+    for node in tree:
+        if node["type"] == "doc":
+            return node["path"]
+        if node.get("children"):
+            found = _first_doc_path(node["children"])
+            if found:
+                return found
+    return None
 
 
 @app.get("/api/help")
 def get_help():
-    """Return help index: nested doc tree + content of HOW_TO_USE file."""
+    """Return help index: nested doc tree. first_path points to the first available doc."""
     root = pathlib.Path(__file__).parent.parent.parent
     docs_dir = root / "docs"
 
     tree = _scan_docs_tree(docs_dir, docs_dir) if docs_dir.exists() else []
-    # Flat list for backwards-compat
-    def _flatten(nodes: list) -> list:
-        result = []
-        for n in nodes:
-            if n["type"] == "doc":
-                result.append({"name": n["path"], "title": n["title"]})
-            elif n.get("children"):
-                result.extend(_flatten(n["children"]))
-        return result
+    first_path = _first_doc_path(tree)
 
-    content = ""
-    for name in ("HOW_TO_USE_RESEARCHBUDDY.md", "README.md"):
-        p = root / name
-        if p.exists():
-            content = p.read_text(encoding="utf-8")
-            break
-
-    return {"content": content, "docs": _flatten(tree), "tree": tree}
+    return {"tree": tree, "first_path": first_path}
 
 
 @app.get("/api/help/{doc_path:path}")
 def get_help_doc(doc_path: str):
-    """Return the content of a doc. doc_path can be nested, e.g. 'guides/getting-started'."""
-    import re as _re
+    """Return the content of a doc (body only, no frontmatter). doc_path can be nested."""
     from fastapi import HTTPException
-    if not _re.fullmatch(r"[a-zA-Z0-9/_-]+", doc_path):
+    if not _re_module.fullmatch(r"[a-zA-Z0-9/_-]+", doc_path):
         raise HTTPException(400, "Invalid doc path")
     root = pathlib.Path(__file__).parent.parent.parent
     p = root / "docs" / f"{doc_path}.md"
@@ -155,8 +185,8 @@ def get_help_doc(doc_path: str):
         import frontmatter as _fm
         post = _fm.loads(p.read_text(encoding="utf-8"))
         title = post.metadata.get("title") or p.stem.replace("-", " ").title()
-        content = p.read_text(encoding="utf-8")
+        body = post.content  # strip frontmatter — NotionEditor doesn't need it
     except Exception:
         title = p.stem
-        content = p.read_text(encoding="utf-8")
-    return {"path": doc_path, "title": title, "content": content}
+        body = p.read_text(encoding="utf-8")
+    return {"path": doc_path, "title": title, "content": body}

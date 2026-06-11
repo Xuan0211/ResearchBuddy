@@ -2,10 +2,11 @@
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
+import Link from "next/link"
 import {
   AtSign, CalendarClock, Check, CheckSquare, ChevronDown, ChevronLeft, ChevronRight, Crown,
-  Database, ExternalLink, FileText, Folder, GripVertical, Mail, Pencil, Plus,
-  RefreshCw, Shield, Square, Trash2, UserPlus, X,
+  Database, ExternalLink, FileText, Folder, GripVertical, HelpCircle, Mail, Pencil, Plus,
+  RefreshCw, Settings, Shield, Square, Trash2, UserPlus, X,
 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Contact, Document, Meeting, Project, ProjectMember } from "@/lib/types"
@@ -28,6 +29,92 @@ interface HomeSettings { countdown_title: string; countdown_target: string }
 interface TodoItem { id: string; text: string; mentions: string[]; doc_ids: string[]; completed: boolean; order: number; is_mine?: boolean; due_at?: string }
 interface TodoList { id: string; title: string; week_start: string; meeting_id?: string; doc_ids?: string[]; due_at?: string; order: number; items: TodoItem[]; is_mine?: boolean; created_at?: string }
 interface TodoItemForm { text: string; mentions: string[]; doc_ids: string[] }
+
+// ── Zotero Help Popover ────────────────────────────────────────────────────────
+
+function ZoteroHelpPopover() {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handler(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener("mousedown", handler)
+    return () => document.removeEventListener("mousedown", handler)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className="p-0.5 rounded-full text-gray-400 hover:text-gray-700 hover:bg-gray-100"
+        title="How to configure Zotero"
+      >
+        <HelpCircle size={14} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 top-6 z-50 w-80 rounded-xl border bg-white shadow-xl text-xs text-gray-700 p-4 space-y-4">
+          <div className="flex items-start justify-between gap-2">
+            <p className="font-semibold text-sm">Zotero Setup Guide</p>
+            <button onClick={() => setOpen(false)} className="text-gray-400 hover:text-black shrink-0"><X size={13} /></button>
+          </div>
+
+          {/* Library type decision */}
+          <div className="space-y-2">
+            <p className="font-medium text-gray-800">Which Library Type?</p>
+            <div className="rounded-lg border border-gray-100 bg-gray-50 divide-y divide-gray-100">
+              <div className="px-3 py-2">
+                <p className="font-medium text-gray-800">User (Personal)</p>
+                <p className="text-gray-500 mt-0.5">Use when the library belongs to you alone. Syncs your personal Zotero account.</p>
+                <p className="mt-1 text-gray-500">
+                  Library ID = your <span className="font-medium">User ID</span>.{" "}
+                  Find it at{" "}
+                  <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer"
+                    className="text-blue-600 underline">zotero.org/settings/keys</a>
+                  {" "}→ scroll to <em>"Your userID for use in API calls"</em>.
+                </p>
+              </div>
+              <div className="px-3 py-2">
+                <p className="font-medium text-gray-800">Group (Shared)</p>
+                <p className="text-gray-500 mt-0.5">Use for team or lab shared Zotero Group libraries. Recommended for multi-person projects.</p>
+                <p className="mt-1 text-gray-500">
+                  Library ID = <span className="font-medium">Group ID</span>.{" "}
+                  Open your group at{" "}
+                  <a href="https://www.zotero.org/groups/" target="_blank" rel="noreferrer"
+                    className="text-blue-600 underline">zotero.org/groups</a>
+                  {" "}— the number in the URL is the Group ID:{" "}
+                  <code className="bg-gray-100 px-1 rounded">zotero.org/groups/&#x3C;GROUP_ID&#x3E;</code>
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* API Key */}
+          <div className="space-y-1.5">
+            <p className="font-medium text-gray-800">API Key</p>
+            <ol className="list-decimal pl-4 space-y-1 text-gray-500">
+              <li>Go to <a href="https://www.zotero.org/settings/keys/new" target="_blank" rel="noreferrer" className="text-blue-600 underline">zotero.org/settings/keys/new</a></li>
+              <li>Check <strong>Allow library access</strong> (read-only is enough)</li>
+              <li>For Group libraries: also check <strong>All Groups — Read Only</strong></li>
+              <li>Click Save and copy the key</li>
+            </ol>
+            <p className="text-gray-400">The key is stored encrypted server-side and never shown again.</p>
+          </div>
+
+          {/* Storage note */}
+          <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-amber-800">
+            <p className="font-medium">Storage note</p>
+            <p className="mt-0.5">Only metadata and abstracts are synced — not PDF files. Zotero storage quota does not apply here.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -566,7 +653,9 @@ export default function HomePage() {
       const member = await api.post<ProjectMember>(`/api/projects/${projectId}/members`, memberForm)
       setMembers(prev => [...prev.filter(m=>m.id!==member.id&&m.email!==member.email), member])
       setMemberForm({ email:"", role:"member" }); setAddingMember(false)
-      setTeamMsg(member.status==="pending"?"Invitation saved. The user will get access automatically after registering.":"Member added.")
+      setTeamMsg(member.status==="pending"
+        ? (member.email_sent ? "Invitation emailed. If they are not registered, the email includes the registration link." : "Invitation saved, but the email could not be sent. They will get access automatically after registering with this email.")
+        : (member.email_sent ? "Member added and notified by email." : "Member added, but the email notification could not be sent."))
       api.get<Contact[]>(`/api/projects/${projectId}/contacts`).then(setContacts).catch(()=>{})
     } catch (err: unknown) { setTeamMsg(err instanceof Error ? err.message : "Could not invite member") }
   }
@@ -1183,12 +1272,22 @@ export default function HomePage() {
 
                   {/* Google Drive */}
                   <section className="space-y-3">
-                    <div className="flex items-center gap-2">
-                      <Folder size={15} className="text-gray-500"/>
-                      <div>
-                        <p className="text-sm font-medium">Google Drive</p>
-                        <p className="text-xs text-gray-400">Choose this project&apos;s Drive folder for syncing docs and meetings.</p>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Folder size={15} className="text-gray-500"/>
+                        <div>
+                          <p className="text-sm font-medium">Google Drive</p>
+                          <p className="text-xs text-gray-400">Choose this project&apos;s Drive folder for syncing docs and meetings.</p>
+                        </div>
                       </div>
+                      <Link
+                        href="/settings"
+                        className="inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs text-gray-500 hover:bg-gray-50 shrink-0"
+                        title="Manage Google Drive connection in Global Settings"
+                      >
+                        <Settings size={11} />
+                        Global Settings
+                      </Link>
                     </div>
                     <div className="rounded-lg bg-gray-50 p-3 text-xs text-gray-500">
                       {driveRoot?.configured ? (
@@ -1196,7 +1295,17 @@ export default function HomePage() {
                           <div className="min-w-0 flex-1"><p>Bound: <b className="text-gray-800">{driveRoot.root_folder_name}</b></p><p className="mt-0.5 truncate font-mono text-[11px]">{driveRoot.root_folder_id}</p></div>
                           {driveRoot.root_folder_link && <a href={driveRoot.root_folder_link} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1 text-blue-600 hover:bg-blue-50">Open<ExternalLink size={11}/></a>}
                         </div>
-                      ) : driveConnected ? <span>No Drive folder selected.</span> : <span>Connect Google Drive in Settings first.</span>}
+                      ) : driveConnected ? (
+                        <span>No Drive folder selected.</span>
+                      ) : (
+                        <div className="flex items-center justify-between gap-3">
+                          <span>Google Drive not connected.</span>
+                          <Link href="/settings"
+                            className="inline-flex items-center gap-1 rounded-md border bg-white px-2.5 py-1 text-blue-600 hover:bg-blue-50 shrink-0 font-medium">
+                            Connect in Settings <ExternalLink size={10}/>
+                          </Link>
+                        </div>
+                      )}
                     </div>
                     <div className="grid gap-2">
                       <select value={driveMode} onChange={e=>setDriveMode(e.target.value as "default"|"existing"|"new")} disabled={!driveConnected} className="rounded-lg border px-3 py-2 text-sm text-gray-700 disabled:bg-gray-50">
@@ -1222,18 +1331,71 @@ export default function HomePage() {
                   <form onSubmit={saveZotero} className="space-y-3">
                     <div className="flex items-center gap-2">
                       <Database size={15} className="text-gray-500"/>
-                      <div>
-                        <p className="text-sm font-medium">Zotero</p>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium">Zotero</p>
+                          <ZoteroHelpPopover />
+                        </div>
                         <p className="text-xs text-gray-400">Project library used by Papers for syncing citations.</p>
                       </div>
                     </div>
                     <div className="grid gap-2">
-                      <input value={zoteroConfig.api_key} onChange={e=>setZoteroConfig({...zoteroConfig,api_key:e.target.value})} placeholder={zoteroConfig.api_key_set?"API key already saved — leave blank to keep it.":"Zotero API key"} className="rounded-lg border px-3 py-2 text-sm"/>
-                      <div className="grid gap-2 sm:grid-cols-[1fr_130px]">
-                        <input value={zoteroConfig.library_id} onChange={e=>setZoteroConfig({...zoteroConfig,library_id:e.target.value})} placeholder="Library ID" className="rounded-lg border px-3 py-2 text-sm"/>
-                        <select value={zoteroConfig.library_type} onChange={e=>setZoteroConfig({...zoteroConfig,library_type:e.target.value as "user"|"group"})} className="rounded-lg border px-3 py-2 text-sm text-gray-700"><option value="user">User</option><option value="group">Group</option></select>
+                      {/* API Key */}
+                      <div className="space-y-1">
+                        <input
+                          value={zoteroConfig.api_key}
+                          onChange={e=>setZoteroConfig({...zoteroConfig,api_key:e.target.value})}
+                          placeholder={zoteroConfig.api_key_set?"API key already saved — leave blank to keep it.":"Zotero API key"}
+                          className="w-full rounded-lg border px-3 py-2 text-sm"
+                        />
+                        <p className="text-[11px] text-gray-400">
+                          Get your key at{" "}
+                          <a href="https://www.zotero.org/settings/keys/new" target="_blank" rel="noreferrer"
+                            className="text-blue-500 underline underline-offset-2">zotero.org/settings/keys/new</a>
+                          {" "}— enable <em>Allow library access</em>.
+                        </p>
                       </div>
-                      <button disabled={settingsBusy==="zotero"} className="w-fit rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">{settingsBusy==="zotero"?"Saving…":"Save Zotero"}</button>
+
+                      {/* Library ID + Type */}
+                      <div className="space-y-1">
+                        <div className="grid gap-2 sm:grid-cols-[1fr_140px]">
+                          <input
+                            value={zoteroConfig.library_id}
+                            onChange={e=>setZoteroConfig({...zoteroConfig,library_id:e.target.value})}
+                            placeholder={zoteroConfig.library_type === "group" ? "Group ID (e.g. 4567890)" : "User ID (e.g. 1234567)"}
+                            className="rounded-lg border px-3 py-2 text-sm"
+                          />
+                          <select
+                            value={zoteroConfig.library_type}
+                            onChange={e=>setZoteroConfig({...zoteroConfig,library_type:e.target.value as "user"|"group"})}
+                            className="rounded-lg border px-3 py-2 text-sm text-gray-700"
+                          >
+                            <option value="user">User (Personal)</option>
+                            <option value="group">Group (Shared)</option>
+                          </select>
+                        </div>
+                        <p className="text-[11px] text-gray-400">
+                          {zoteroConfig.library_type === "group" ? (
+                            <>
+                              Group ID: open your group at{" "}
+                              <a href="https://www.zotero.org/groups/" target="_blank" rel="noreferrer"
+                                className="text-blue-500 underline underline-offset-2">zotero.org/groups</a>
+                              {" "}— the number in the URL is the Group ID.
+                            </>
+                          ) : (
+                            <>
+                              User ID: go to{" "}
+                              <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer"
+                                className="text-blue-500 underline underline-offset-2">zotero.org/settings/keys</a>
+                              {" "}and look for <em>"Your userID for use in API calls"</em>.
+                            </>
+                          )}
+                        </p>
+                      </div>
+
+                      <button disabled={settingsBusy==="zotero"} className="w-fit rounded-lg border px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                        {settingsBusy==="zotero"?"Saving…":"Save Zotero"}
+                      </button>
                     </div>
                   </form>
 

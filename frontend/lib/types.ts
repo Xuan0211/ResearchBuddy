@@ -63,6 +63,20 @@ export interface ProjectMember {
   registered: boolean
   joined_at?: string
   invited_at?: string
+  email_sent?: boolean
+}
+
+export interface FeedbackPost {
+  id: string
+  title: string
+  body: string
+  author_name: string
+  author_email: string
+  votes: number
+  voted_by_me: boolean
+  created_at: string
+  updated_at: string
+  notification_sent?: boolean
 }
 
 export interface Document {

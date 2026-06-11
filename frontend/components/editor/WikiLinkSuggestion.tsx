@@ -2,17 +2,23 @@
 import { useEffect, useRef, useState } from "react"
 import type { WikiSuggestionState } from "./WikiLinkExtension"
 
-interface Paper { id: string; title: string; authors: string[]; year: number | null }
+interface SuggestionItem {
+  id: string
+  title: string
+  authors?: string[]
+  year?: number | null
+  folder?: string
+}
 
 interface Props {
   state: WikiSuggestionState
   projectId: string
-  onSelect: (paper: Paper) => void
+  onSelect: (item: SuggestionItem) => void
   onClose: () => void
 }
 
 export default function WikiLinkSuggestion({ state, projectId, onSelect, onClose }: Props) {
-  const [results, setResults] = useState<Paper[]>([])
+  const [results, setResults] = useState<SuggestionItem[]>([])
   const [idx, setIdx] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -20,13 +26,14 @@ export default function WikiLinkSuggestion({ state, projectId, onSelect, onClose
     if (!state.active) { setResults([]); return }
     const token = localStorage.getItem("rb_token") ?? ""
     const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
-    fetch(`${BASE}/api/projects/${projectId}/papers/search?q=${encodeURIComponent(state.query)}`, {
+    const endpoint = state.mode === "paper" ? "papers/search" : "docs/search"
+    fetch(`${BASE}/api/projects/${projectId}/${endpoint}?q=${encodeURIComponent(state.query)}`, {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(r => r.json())
       .then(data => { setResults(data); setIdx(0) })
       .catch(() => setResults([]))
-  }, [state.query, state.active, projectId])
+  }, [state.query, state.active, state.mode, projectId])
 
   // Keyboard navigation forwarded from the editor
   useEffect(() => {
@@ -59,11 +66,15 @@ export default function WikiLinkSuggestion({ state, projectId, onSelect, onClose
           onMouseDown={e => { e.preventDefault(); onSelect(p) }}
           onMouseEnter={() => setIdx(i)}
         >
-          <code className="text-[10px] text-gray-400 mt-0.5 flex-shrink-0 font-mono">@{p.id.slice(0, 12)}</code>
+          <code className="text-[10px] text-gray-400 mt-0.5 flex-shrink-0 font-mono">
+            {state.mode === "paper" ? `@${p.id.slice(0, 12)}` : "{{}}"}
+          </code>
           <div className="min-w-0">
             <p className="font-medium text-xs line-clamp-1">{p.title}</p>
             <p className="text-xs text-gray-400 truncate">
-              {p.authors?.[0]?.split(",")[0]} {p.year ? `· ${p.year}` : ""}
+              {state.mode === "paper"
+                ? `${p.authors?.[0]?.split(",")[0] ?? ""} ${p.year ? `· ${p.year}` : ""}`
+                : (p.folder ? `/${p.folder}` : "Document")}
             </p>
           </div>
         </button>

@@ -4,7 +4,7 @@ import { BookOpen, ChevronRight, FileText, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document, ProjectSkill, SectionResourceDoc, SectionResources } from "@/lib/types"
 
-type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "images" | "prototype" | "skills"
+type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "design" | "prototype" | "skills"
 
 type Props = {
   projectId: string

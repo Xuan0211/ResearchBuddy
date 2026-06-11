@@ -11,7 +11,7 @@ from ..core.security import (
     hash_password,
     verify_password,
 )
-from ..models import APIKey, DocumentShare, DriveFileMapping, GoogleDriveToken, PaperImage, Project, ProjectInvite, ProjectMember, User
+from ..models import APIKey, DocumentShare, DriveFileMapping, FeedbackPost, FeedbackVote, GoogleDriveToken, PaperImage, Project, ProjectInvite, ProjectMember, User
 from ..services import git_service
 from ..services.members import apply_pending_project_invites, normalize_email
 
@@ -143,6 +143,12 @@ def delete_account(
         session.delete(row)
     for row in session.exec(select(APIKey).where(APIKey.user_id == current_user.id)).all():
         session.delete(row)
+    for row in session.exec(select(FeedbackVote).where(FeedbackVote.user_id == current_user.id)).all():
+        session.delete(row)
+    for post in session.exec(select(FeedbackPost).where(FeedbackPost.user_id == current_user.id)).all():
+        for vote in session.exec(select(FeedbackVote).where(FeedbackVote.post_id == post.id)).all():
+            session.delete(vote)
+        session.delete(post)
     drive_token = session.exec(select(GoogleDriveToken).where(GoogleDriveToken.user_id == current_user.id)).first()
     if drive_token:
         session.delete(drive_token)

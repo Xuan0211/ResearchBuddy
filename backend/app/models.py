@@ -94,3 +94,19 @@ class PaperImage(SQLModel, table=True):
     filename: str
     content_type: str
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class FeedbackPost(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    title: str
+    body: str
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class FeedbackVote(SQLModel, table=True):
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    post_id: UUID = Field(foreign_key="feedbackpost.id", index=True)
+    user_id: UUID = Field(foreign_key="user.id", index=True)
+    created_at: datetime = Field(default_factory=utcnow)

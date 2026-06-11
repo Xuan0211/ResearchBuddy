@@ -13,6 +13,7 @@ from ..core.db import engine
 from ..core.paths import DOCS_DIR
 from ..models import DriveFileMapping, Project
 from . import document_tabs as dt
+from . import document_comments as dc
 from . import frontmatter as fm
 from . import google_drive as gd
 from .project_fs import file_last_commit_time, project_worktree, read_project_file
@@ -155,6 +156,12 @@ def pull_doc_from_drive(
         if not path.exists():
             raise FileNotFoundError(f"{DOCS_DIR}/{doc_id}.md")
         meta, _ = fm.read(path)
+        pulled_tabs, pulled_comments = dc.extract_comments_from_tabs(
+            dt.parse_tabs(next_content, _doc_default_tab_title(meta))
+        )
+        next_content = dt.serialize_tabs(pulled_tabs, _doc_default_tab_title(meta))
+        if pulled_comments:
+            meta["comments"] = pulled_comments
         meta["papers"] = _extract_paper_refs(next_content)
         meta["mentions"] = _extract_mentions(next_content)
         fm.write(path, meta, next_content)
@@ -179,6 +186,7 @@ def push_doc_to_drive(
     meta = _parse_doc(project_id, doc_id)
     title = meta.get("title", doc_id)
     tabs = meta.get("tabs") or dt.parse_tabs(meta.get("_body", ""), _doc_default_tab_title(meta))
+    tabs = dc.attach_comments_to_tabs(tabs, meta.get("comments", []))
     doc_folder = meta.get("folder", "")
     project = session.get(Project, project_id)
     if not project:

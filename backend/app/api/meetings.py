@@ -16,6 +16,7 @@ from ..core.db import get_session
 from ..core.paths import MEETINGS_DIR, MEETING_SETTINGS_PATH, MTGLOG_PATH
 from ..core.security import get_current_user
 from ..models import DocumentShare, User
+from ..services import document_comments as dc
 from ..services.contacts import list_contacts
 from ..services import document_tabs as dt
 from ..services import frontmatter as fm
@@ -171,6 +172,10 @@ class MeetingDriveSyncIn(BaseModel):
     mode: str = "mapped"
     drive_url: str = ""
     file_id: str = ""
+
+
+class CommentIn(BaseModel):
+    text: str
 
 
 class MeetingTabIn(BaseModel):
@@ -466,6 +471,60 @@ def get_meeting(
         return public
     except FileNotFoundError:
         raise HTTPException(404, "Meeting not found")
+
+
+@router.get("/{mtg_id}/comments")
+def get_meeting_comments(
+    project_id: str,
+    mtg_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    try:
+        meeting = _parse_meeting(project_id, f"{MEETINGS_DIR}/{mtg_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+    return {"comments": dc.normalize_comments(meeting.get("comments", []))}
+
+
+@router.post("/{mtg_id}/comments", status_code=201)
+def create_meeting_comment(
+    project_id: str,
+    mtg_id: str,
+    body: CommentIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Add meeting comment: {mtg_id}"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.add_comment(meta.get("comments", []), body.text, current_user)
+        fm.write(path, meta, content)
+    return {"comments": meta["comments"]}
+
+
+@router.delete("/{mtg_id}/comments/{comment_id}", status_code=204)
+def delete_meeting_comment(
+    project_id: str,
+    mtg_id: str,
+    comment_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Delete meeting comment: {mtg_id}"
+        path = wt / MEETINGS_DIR / f"{mtg_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.delete_comment(meta.get("comments", []), comment_id)
+        fm.write(path, meta, content)
 
 
 @router.get("/{mtg_id}/share")
@@ -793,6 +852,7 @@ async def sync_meeting_to_drive(
     content = meta.get("_body", "")
     title = meta.get("title", mtg_id)
     tabs = meta.get("tabs") or dt.parse_tabs(content, "Pre-meeting")
+    tabs = dc.attach_comments_to_tabs(tabs, meta.get("comments", []))
     body = body or MeetingDriveSyncIn()
 
     project = session.get(Project, project_id)
@@ -883,6 +943,7 @@ async def pull_meeting_from_drive(
     pulled_tabs = dt.parse_tabs(text, "Pre-meeting")
     if pulled_tabs:
         pulled_tabs[-1]["content"] = gd.strip_sync_footer(pulled_tabs[-1]["content"])
+    pulled_tabs, pulled_comments = dc.extract_comments_from_tabs(pulled_tabs)
     next_content = dt.serialize_tabs(pulled_tabs, "Pre-meeting")
 
     from datetime import datetime, timezone
@@ -892,6 +953,8 @@ async def pull_meeting_from_drive(
         if not path.exists():
             raise HTTPException(404)
         meta, _ = fm.read(path)
+        if pulled_comments:
+            meta["comments"] = pulled_comments
         fm.write(path, meta, next_content)
 
     mapping.synced_at = datetime.now(timezone.utc)
@@ -936,6 +999,7 @@ async def smart_sync_meeting(
         content = meta.get("_body", "")
         title = meta.get("title", mtg_id)
         tabs = meta.get("tabs") or dt.parse_tabs(content, "Pre-meeting")
+        tabs = dc.attach_comments_to_tabs(tabs, meta.get("comments", []))
         project = session.get(Project, project_id)
         try:
             service = gd.get_service(token, str(current_user.id), session)
@@ -968,6 +1032,7 @@ async def smart_sync_meeting(
         pulled_tabs = dt.parse_tabs(text, "Pre-meeting")
         if pulled_tabs:
             pulled_tabs[-1]["content"] = gd.strip_sync_footer(pulled_tabs[-1]["content"])
+        pulled_tabs, pulled_comments = dc.extract_comments_from_tabs(pulled_tabs)
         next_content = dt.serialize_tabs(pulled_tabs, "Pre-meeting")
 
         with project_worktree(project_id) as wt:
@@ -976,6 +1041,8 @@ async def smart_sync_meeting(
             if not path.exists():
                 raise HTTPException(404)
             old_meta, _ = fm.read(path)
+            if pulled_comments:
+                old_meta["comments"] = pulled_comments
             fm.write(path, old_meta, next_content)
 
         mapping.synced_at = datetime.now(timezone.utc)
@@ -987,6 +1054,7 @@ async def smart_sync_meeting(
         content = meta.get("_body", "")
         title = meta.get("title", mtg_id)
         tabs = meta.get("tabs") or dt.parse_tabs(content, "Pre-meeting")
+        tabs = dc.attach_comments_to_tabs(tabs, meta.get("comments", []))
         project = session.get(Project, project_id)
         try:
             docs_service = gd.get_docs_service(token, str(current_user.id), session)
@@ -1002,6 +1070,54 @@ async def smart_sync_meeting(
         session.add(mapping)
         session.commit()
         return {"direction": "push", "ok": True, "drive_link": result.get("webViewLink", "")}
+
+
+@router.post("/smart-sync-all")
+async def smart_sync_all_meetings(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Smart-sync every meeting document in this project with Google Drive."""
+    check_member(project_id, current_user, session, min_role="member")
+
+    paths = list_project_dir(project_id, MEETINGS_DIR)
+    mtg_ids: list[str] = []
+    for p in sorted(paths, reverse=True):
+        parts = p.split("/")
+        if p.endswith(".md") and len(parts) == 3:
+            mtg_ids.append(parts[-1].removesuffix(".md"))
+
+    result: dict[str, object] = {
+        "total": len(mtg_ids),
+        "pushed": 0,
+        "pulled": 0,
+        "noop": 0,
+        "failed": 0,
+        "items": [],
+    }
+    items: list[dict[str, object]] = []
+
+    for mtg_id in mtg_ids:
+        try:
+            sync_res = await smart_sync_meeting(project_id, mtg_id, current_user, session)
+            direction = sync_res.get("direction", "noop")
+            if direction == "push":
+                result["pushed"] = int(result["pushed"]) + 1
+            elif direction == "pull":
+                result["pulled"] = int(result["pulled"]) + 1
+            else:
+                result["noop"] = int(result["noop"]) + 1
+            items.append({"id": mtg_id, "direction": direction, "drive_link": sync_res.get("drive_link", "")})
+        except HTTPException as exc:
+            result["failed"] = int(result["failed"]) + 1
+            items.append({"id": mtg_id, "direction": "failed", "error": str(exc.detail)[:500]})
+        except Exception as exc:
+            result["failed"] = int(result["failed"]) + 1
+            items.append({"id": mtg_id, "direction": "failed", "error": str(exc)[:500]})
+
+    result["items"] = items
+    return result
 
 
 @router.post("/mtg-log/sync")

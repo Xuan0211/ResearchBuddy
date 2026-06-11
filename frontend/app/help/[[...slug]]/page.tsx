@@ -1,10 +1,12 @@
 "use client"
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
-import ReactMarkdown from "react-markdown"
-import remarkGfm from "remark-gfm"
-import { BookOpen, ChevronDown, ChevronRight, Link2 } from "lucide-react"
+import dynamic from "next/dynamic"
+import { BookOpen, ChevronDown, ChevronRight, File, Folder, Link2 } from "lucide-react"
+
+// Reuse the same NotionEditor in readOnly mode — gets callouts, tables, math, etc. for free
+const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -13,99 +15,75 @@ interface DocNode {
   name: string
   title: string
   path: string
+  display_name?: string
   children?: DocNode[]
 }
 
 interface HelpIndex {
-  content: string
   tree: DocNode[]
-}
-
-// ── Markdown components with proper table + code rendering ────────────────────
-
-const MD: Record<string, React.ComponentType<any>> = {
-  table: ({ children }) => (
-    <div className="overflow-x-auto my-5">
-      <table className="min-w-full border-collapse text-sm">{children}</table>
-    </div>
-  ),
-  thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
-  tbody: ({ children }) => <tbody>{children}</tbody>,
-  tr: ({ children }) => <tr className="border-b border-gray-100 even:bg-gray-50/40">{children}</tr>,
-  th: ({ children }) => (
-    <th className="border border-gray-200 px-4 py-2 text-left font-semibold text-gray-700 whitespace-nowrap">
-      {children}
-    </th>
-  ),
-  td: ({ children }) => (
-    <td className="border border-gray-200 px-4 py-2 text-gray-700">{children}</td>
-  ),
-  code: ({ inline, className, children }) => {
-    if (inline) {
-      return (
-        <code className="bg-gray-100 text-gray-800 rounded px-1.5 py-0.5 font-mono text-[13px]">
-          {children}
-        </code>
-      )
-    }
-    return (
-      <pre className="bg-gray-50 border border-gray-200 rounded-xl p-4 overflow-x-auto my-4">
-        <code className="font-mono text-[13px] text-gray-800 leading-relaxed">{children}</code>
-      </pre>
-    )
-  },
-  h1: ({ children }) => <h1 className="text-2xl font-bold mt-8 mb-4 text-gray-900">{children}</h1>,
-  h2: ({ children }) => <h2 className="text-xl font-semibold mt-7 mb-3 text-gray-900 border-b pb-1">{children}</h2>,
-  h3: ({ children }) => <h3 className="text-base font-semibold mt-5 mb-2 text-gray-900">{children}</h3>,
-  p: ({ children }) => <p className="my-3 leading-relaxed text-gray-700">{children}</p>,
-  ul: ({ children }) => <ul className="list-disc pl-5 my-3 space-y-1 text-gray-700">{children}</ul>,
-  ol: ({ children }) => <ol className="list-decimal pl-5 my-3 space-y-1 text-gray-700">{children}</ol>,
-  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-  a: ({ href, children }) => (
-    <a href={href} target={href?.startsWith("http") ? "_blank" : undefined}
-      rel="noreferrer" className="text-blue-600 hover:text-blue-800 underline underline-offset-2">
-      {children}
-    </a>
-  ),
-  blockquote: ({ children }) => (
-    <blockquote className="border-l-4 border-gray-200 pl-4 my-4 text-gray-600 italic">{children}</blockquote>
-  ),
-  hr: () => <hr className="my-6 border-gray-100" />,
+  first_path: string | null
 }
 
 // ── Sidebar tree ──────────────────────────────────────────────────────────────
 
-function TreeNode({ node, activePath }: { node: DocNode; activePath: string }) {
-  const [open, setOpen] = useState(true)
+function SidebarDoc({ node, activePath }: { node: DocNode; activePath: string }) {
+  const isActive = activePath === node.path
+  return (
+    <Link
+      href={`/help/${node.path}`}
+      className={`flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-lg text-sm transition-colors group ${
+        isActive
+          ? "bg-black text-white font-medium"
+          : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+      }`}
+    >
+      <File size={12} className={`shrink-0 ${isActive ? "text-gray-300" : "text-gray-400"}`} />
+      <span className="truncate">{node.title}</span>
+    </Link>
+  )
+}
 
-  if (node.type === "doc") {
-    const isActive = activePath === node.path
-    return (
-      <Link
-        href={`/help/${node.path}`}
-        className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-          isActive ? "bg-black text-white font-medium" : "text-gray-600 hover:bg-gray-100"
-        }`}
-      >
-        {node.title}
-      </Link>
-    )
+function SidebarDir({
+  node,
+  activePath,
+  depth = 0,
+}: {
+  node: DocNode
+  activePath: string
+  depth?: number
+}) {
+  // Auto-open if any child is active
+  const isChildActive = (n: DocNode): boolean => {
+    if (n.type === "doc") return n.path === activePath
+    return n.children?.some(isChildActive) ?? false
   }
+  const [open, setOpen] = useState(() => isChildActive(node))
+
+  // Re-open when active path changes to a child
+  useEffect(() => {
+    if (isChildActive(node)) setOpen(true)
+  }, [activePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
       <button
         onClick={() => setOpen(v => !v)}
-        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wide hover:text-gray-600"
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-left text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
+        style={{ paddingLeft: depth * 8 + 8 }}
       >
-        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-        {node.title}
+        {open
+          ? <ChevronDown size={13} className="shrink-0 text-gray-400" />
+          : <ChevronRight size={13} className="shrink-0 text-gray-400" />}
+        <Folder size={13} className="shrink-0 text-amber-400" />
+        <span className="text-xs font-semibold tracking-wide">{node.title}</span>
       </button>
       {open && (
-        <div className="ml-2 pl-2 border-l border-gray-100 space-y-0.5">
-          {node.children?.map(child => (
-            <TreeNode key={child.path || child.name} node={child} activePath={activePath} />
-          ))}
+        <div className="ml-4 pl-2 border-l border-gray-100 space-y-0.5 mt-0.5">
+          {node.children?.map(child =>
+            child.type === "dir"
+              ? <SidebarDir key={child.path} node={child} activePath={activePath} depth={depth + 1} />
+              : <SidebarDoc key={child.path} node={child} activePath={activePath} />
+          )}
         </div>
       )}
     </div>
@@ -120,35 +98,39 @@ export default function HelpPage() {
   const params = useParams<{ slug?: string[] }>()
   const router = useRouter()
   const slug = params.slug ?? []
-  const currentPath = slug.join("/") // "" for index
+  const currentPath = slug.join("/")
 
   const [index, setIndex] = useState<HelpIndex | null>(null)
-  const [docContent, setDocContent] = useState<string | null>(null)
+  const [docContent, setDocContent] = useState<string>("")
   const [docTitle, setDocTitle] = useState("")
   const [loading, setLoading] = useState(true)
   const [copied, setCopied] = useState(false)
 
-  // Load index tree once
+  // Load tree once; auto-redirect to first doc if at root
   useEffect(() => {
     fetch(`${BASE}/api/help`)
       .then(r => r.json())
-      .then(setIndex)
-      .catch(() => setIndex({ content: "", tree: [] }))
-  }, [])
+      .then((data: HelpIndex) => {
+        setIndex(data)
+        if (!currentPath && data.first_path) {
+          router.replace(`/help/${data.first_path}`)
+        }
+      })
+      .catch(() => setIndex({ tree: [], first_path: null }))
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load doc content when path changes
   useEffect(() => {
-    if (!currentPath) {
-      setDocContent(null)
-      setDocTitle("")
-      setLoading(false)
-      return
-    }
+    if (!currentPath) { setLoading(false); return }
     setLoading(true)
+    setDocContent("")
     fetch(`${BASE}/api/help/${currentPath}`)
       .then(r => r.json())
-      .then(d => { setDocContent(d.content); setDocTitle(d.title) })
-      .catch(() => { setDocContent("# Not found\n\nThis document doesn't exist."); setDocTitle("") })
+      .then(d => { setDocContent(d.content ?? ""); setDocTitle(d.title ?? "") })
+      .catch(() => {
+        setDocContent("# Not found\n\nThis document doesn't exist.")
+        setDocTitle("Not found")
+      })
       .finally(() => setLoading(false))
   }, [currentPath])
 
@@ -158,76 +140,77 @@ export default function HelpPage() {
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const content = currentPath ? docContent : (index?.content ?? null)
-  const title = currentPath ? docTitle : "How to Use ResearchBuddy"
+  // Build breadcrumb from slug
+  const breadcrumb = slug.map((part, i) => ({
+    label: part.replace(/^\d+-/, "").replace(/-/g, " "),
+    href: i < slug.length - 1 ? `/help/${slug.slice(0, i + 1).join("/")}` : null,
+  }))
 
   return (
     <>
       {/* ── Sidebar ── */}
-      <aside className="w-56 border-r bg-gray-50 flex-shrink-0 overflow-y-auto">
-        <div className="p-3 border-b">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Docs</p>
+      <aside className="w-60 border-r bg-gray-50 flex-shrink-0 overflow-y-auto">
+        <div className="px-3 py-3 border-b">
+          <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+            <BookOpen size={13} />
+            Documentation
+          </div>
         </div>
         <nav className="p-2 space-y-0.5">
-          <Link
-            href="/help"
-            className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
-              !currentPath ? "bg-black text-white font-medium" : "text-gray-600 hover:bg-gray-100"
-            }`}
-          >
-            <BookOpen size={13} className="flex-shrink-0" />
-            How to Use
-          </Link>
-          {(index?.tree ?? []).map(node => (
-            <TreeNode key={node.path || node.name} node={node} activePath={currentPath} />
-          ))}
+          {(index?.tree ?? []).map(node =>
+            node.type === "dir"
+              ? <SidebarDir key={node.path} node={node} activePath={currentPath} />
+              : <SidebarDoc key={node.path} node={node} activePath={currentPath} />
+          )}
         </nav>
       </aside>
 
       {/* ── Content ── */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-8 py-8">
-          {loading ? (
-            <div className="text-sm text-gray-400">Loading…</div>
-          ) : content !== null ? (
-            <>
-              {/* Breadcrumb + share */}
-              {currentPath && (
-                <div className="flex items-center justify-between mb-6">
-                  <nav className="flex items-center gap-1.5 text-xs text-gray-400">
-                    <Link href="/help" className="hover:text-gray-700">Docs</Link>
-                    {slug.map((part, i) => (
-                      <span key={i} className="flex items-center gap-1.5">
-                        <span>/</span>
-                        {i < slug.length - 1 ? (
-                          <Link href={`/help/${slug.slice(0, i + 1).join("/")}`} className="hover:text-gray-700 capitalize">
-                            {part.replace(/-/g, " ")}
-                          </Link>
-                        ) : (
-                          <span className="text-gray-600 font-medium capitalize">{part.replace(/-/g, " ")}</span>
-                        )}
-                      </span>
-                    ))}
-                  </nav>
-                  <button
-                    onClick={copyLink}
-                    className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 border rounded-lg px-2.5 py-1.5"
-                  >
-                    <Link2 size={11} />
-                    {copied ? "Copied!" : "Copy link"}
-                  </button>
-                </div>
-              )}
-              <article className="text-sm text-gray-700 leading-relaxed">
-                <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD}>
-                  {content}
-                </ReactMarkdown>
-              </article>
-            </>
-          ) : (
-            <div className="text-sm text-gray-400">Select a doc from the sidebar.</div>
-          )}
-        </div>
+        {loading ? (
+          <div className="flex items-center justify-center h-32 text-sm text-gray-400">Loading…</div>
+        ) : currentPath && docContent ? (
+          <div className="max-w-3xl mx-auto">
+            {/* Top bar: breadcrumb + copy link */}
+            <div className="sticky top-0 z-10 bg-white border-b px-8 py-3 flex items-center justify-between">
+              <nav className="flex items-center gap-1.5 text-xs text-gray-400 min-w-0">
+                <Link href="/help" className="hover:text-gray-700 shrink-0">Docs</Link>
+                {breadcrumb.map((crumb, i) => (
+                  <span key={i} className="flex items-center gap-1.5 min-w-0">
+                    <span className="shrink-0">/</span>
+                    {crumb.href ? (
+                      <Link href={crumb.href} className="hover:text-gray-700 capitalize truncate">
+                        {crumb.label}
+                      </Link>
+                    ) : (
+                      <span className="text-gray-700 font-medium capitalize truncate">{crumb.label}</span>
+                    )}
+                  </span>
+                ))}
+              </nav>
+              <button
+                onClick={copyLink}
+                className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-700 border rounded-lg px-2.5 py-1.5 shrink-0 ml-4"
+              >
+                <Link2 size={11} />
+                {copied ? "Copied!" : "Copy link"}
+              </button>
+            </div>
+
+            {/* Doc body — rendered via NotionEditor (readOnly) for full wiki feature parity */}
+            <div className="pb-16">
+              <NotionEditor
+                key={currentPath}
+                content={docContent}
+                readOnly={true}
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center justify-center h-32 text-sm text-gray-400">
+            Select a doc from the sidebar.
+          </div>
+        )}
       </main>
     </>
   )

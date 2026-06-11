@@ -239,6 +239,12 @@ async def sync_project(
                     paper_path = papers_dir / f"{zotero_key}.md"
                 fm.write(paper_path, meta, "\n## Notes\n\n\n## Related\n\n")
                 created += 1
-        rebuild_papers_bib_files(Path(str(wt)))
+        bib_stats = rebuild_papers_bib_files(Path(str(wt)))
 
-    return {"created": created, "updated": updated, "skipped": skipped, "total": len(items)}
+    return {
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "total": len(items),
+        "bib_entries": bib_stats["references"],
+    }

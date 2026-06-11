@@ -1,7 +1,7 @@
 /**
  * WikiLink TipTap extension.
- * Triggers on [[ or 【【, shows paper search suggestions,
- * inserts [[paper_id]] on select, renders links as styled marks.
+ * Triggers on [[ for papers and {{ / @ for documents.
+ * Renders links as styled decorations over Markdown-friendly tokens.
  */
 import { Extension, Mark, mergeAttributes } from "@tiptap/core"
 import { Plugin, PluginKey, TextSelection } from "prosemirror-state"
@@ -35,6 +35,7 @@ export const WikiLinkMark = Mark.create({
 
 export interface WikiSuggestionState {
   active: boolean
+  mode: "paper" | "doc"
   query: string
   range: { from: number; to: number }
   rect: DOMRect | null
@@ -42,8 +43,11 @@ export interface WikiSuggestionState {
 
 export const wikiSuggestionKey = new PluginKey<WikiSuggestionState>("wikiSuggestion")
 
-const TRIGGER_RE = /(\[\[|【【)([^\]\n【]*)$/
+const TRIGGER_RE = /(\[\[|【【|\{\{|@)([^\]\}\n【@]*)$/
 const WIKI_LINK_RE = /\[\[([^\]]+)\]\]/g
+const DOC_REF_RE = /\{\{([^}|]+)(?:\|([^}]+))?\}\}/g
+
+type DocResolver = (id: string, title?: string) => { label: string; missing: boolean }
 
 function findWikiLinkRange(state: EditorState, pos: number, key: "Backspace" | "Delete") {
   const $pos = state.doc.resolve(pos)
@@ -54,29 +58,32 @@ function findWikiLinkRange(state: EditorState, pos: number, key: "Backspace" | "
   const offset = pos - parentStart
   const text = parent.textBetween(0, parent.content.size, "\n", "\0")
   let m: RegExpExecArray | null
-  WIKI_LINK_RE.lastIndex = 0
-  while ((m = WIKI_LINK_RE.exec(text))) {
-    const start = m.index
-    const end = m.index + m[0].length
-    const shouldDelete = key === "Backspace"
-      ? offset > start && offset <= end
-      : offset >= start && offset < end
-    if (shouldDelete) {
-      return { from: parentStart + start, to: parentStart + end }
+  for (const re of [WIKI_LINK_RE, DOC_REF_RE]) {
+    re.lastIndex = 0
+    while ((m = re.exec(text))) {
+      const start = m.index
+      const end = m.index + m[0].length
+      const shouldDelete = key === "Backspace"
+        ? offset > start && offset <= end
+        : offset >= start && offset < end
+      if (shouldDelete) {
+        return { from: parentStart + start, to: parentStart + end }
+      }
     }
   }
   return null
 }
 
 export function createWikiLinkPlugin(
-  onStateChange: (state: WikiSuggestionState) => void
+  onStateChange: (state: WikiSuggestionState) => void,
+  resolveDocRef?: DocResolver,
 ) {
   return new Plugin({
     key: wikiSuggestionKey,
 
     state: {
       init(): WikiSuggestionState {
-        return { active: false, query: "", range: { from: 0, to: 0 }, rect: null }
+        return { active: false, mode: "paper", query: "", range: { from: 0, to: 0 }, rect: null }
       },
       apply(tr, prev): WikiSuggestionState {
         const sel = tr.selection
@@ -85,8 +92,10 @@ export function createWikiLinkPlugin(
         const text = tr.doc.textBetween(Math.max(0, from - 60), from, "\n", "\0")
         const m = TRIGGER_RE.exec(text)
         if (!m) return { ...prev, active: false }
+        const trigger = m[1]
         return {
           active: true,
+          mode: trigger === "[[" || trigger === "【【" ? "paper" : "doc",
           query: m[2],
           range: { from: from - m[0].length, to: from },
           rect: null,
@@ -121,7 +130,7 @@ export function createWikiLinkPlugin(
           onStateChange({ ...next, rect })
         },
         destroy() {
-          onStateChange({ active: false, query: "", range: { from: 0, to: 0 }, rect: null })
+          onStateChange({ active: false, mode: "paper", query: "", range: { from: 0, to: 0 }, rect: null })
         },
       }
     },
@@ -141,6 +150,20 @@ export function createWikiLinkPlugin(
                 class: "wiki-link-decoration",
                 "data-paper-id": m[1],
                 "data-wiki-label": m[1],
+              })
+            )
+          }
+          DOC_REF_RE.lastIndex = 0
+          while ((m = DOC_REF_RE.exec(text))) {
+            const id = m[1]
+            const title = m[2] || id
+            const resolved = resolveDocRef?.(id, title) ?? { label: title, missing: false }
+            decos.push(
+              Decoration.inline(pos + m.index, pos + m.index + m[0].length, {
+                class: `doc-link-decoration${resolved.missing ? " is-missing" : ""}`,
+                "data-doc-id": id,
+                "data-doc-title": title,
+                "data-wiki-label": resolved.missing ? `${resolved.label} (missing)` : resolved.label,
               })
             )
           }
@@ -165,13 +188,14 @@ export function createWikiLinkPlugin(
 // ── Extension wrapper ───────────────────────────────────────────────────────
 
 export const WikiLinkExtension = (
-  onStateChange: (state: WikiSuggestionState) => void
+  onStateChange: (state: WikiSuggestionState) => void,
+  resolveDocRef?: DocResolver,
 ) =>
   Extension.create({
     name: "wikiLinkExtension",
 
     addProseMirrorPlugins() {
-      return [createWikiLinkPlugin(onStateChange)]
+      return [createWikiLinkPlugin(onStateChange, resolveDocRef)]
     },
 
     addKeyboardShortcuts() {

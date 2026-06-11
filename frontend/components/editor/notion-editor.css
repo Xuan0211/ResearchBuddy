@@ -32,6 +32,13 @@
 /* Bold / italic */
 .notion-editor .tiptap strong { font-weight: 600; }
 
+/* Links */
+.notion-editor .tiptap a {
+  color: #2563eb;
+  text-decoration: underline;
+  text-underline-offset: 0.16em;
+}
+
 /* ResearchBuddy inline annotation marks survive Markdown round-trips as HTML spans. */
 .notion-editor .tiptap .rb-annotation[data-rb-tone="red"] {
   color: #b91c1c;
@@ -94,6 +101,79 @@
 .notion-editor .tiptap ol { list-style: decimal; padding-left: 1.4em; margin: 0.3em 0; }
 .notion-editor .tiptap li { margin: 0.15em 0; }
 
+/* Markdown-style tables */
+.notion-editor .tiptap .tableWrapper {
+  overflow-x: auto;
+  margin: 0.8em 0;
+}
+.notion-editor .tiptap table {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+  min-width: 28rem;
+  margin: 0.8em 0;
+  font-size: 0.875rem;
+}
+.notion-editor .tiptap th,
+.notion-editor .tiptap td {
+  position: relative;
+  border: 1px solid #e5e7eb;
+  min-width: 6rem;
+  padding: 0.45rem 0.55rem;
+  vertical-align: top;
+}
+.notion-editor .tiptap th {
+  background: #f9fafb;
+  color: #374151;
+  font-weight: 600;
+}
+.notion-editor .tiptap td p,
+.notion-editor .tiptap th p {
+  margin: 0;
+}
+.notion-editor .tiptap .selectedCell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(37, 99, 235, 0.08);
+  pointer-events: none;
+}
+.notion-editor .tiptap .column-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: #93c5fd;
+  pointer-events: none;
+}
+
+/* LaTeX math */
+.notion-editor .tiptap .rb-math-node {
+  position: relative;
+  border-radius: 4px;
+}
+.notion-editor .tiptap .rb-math-node-inline {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2rem;
+  padding: 0 0.08rem;
+}
+.notion-editor .tiptap .rb-math-node-block {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  padding: 0.5rem 0.75rem;
+  overflow-x: auto;
+}
+.notion-editor .tiptap .ProseMirror-selectednode.rb-math-node {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
 /* Horizontal rule */
 .notion-editor .tiptap hr { border: none; border-top: 1px solid #e5e5e5; margin: 1.5em 0; }
 
@@ -101,13 +181,15 @@
 .notion-editor .tiptap ::selection { background: #b5d4f5; }
 
 /* Wiki links are stored as [[paper_id]] markdown but rendered as one chip. */
-.notion-editor .tiptap .wiki-link-decoration {
+.notion-editor .tiptap .wiki-link-decoration,
+.notion-editor .tiptap .doc-link-decoration {
   cursor: pointer;
   font-size: 0;
   white-space: nowrap;
 }
 
-.notion-editor .tiptap .wiki-link-decoration::after {
+.notion-editor .tiptap .wiki-link-decoration::after,
+.notion-editor .tiptap .doc-link-decoration::after {
   content: attr(data-wiki-label);
   display: inline-flex;
   align-items: center;
@@ -122,6 +204,18 @@
   padding: 0.05rem 0.35rem;
   font-size: 0.8125rem;
   line-height: 1.45;
+}
+
+.notion-editor .tiptap .doc-link-decoration::after {
+  border-color: #d1d5db;
+  background: #f9fafb;
+  color: #374151;
+}
+
+.notion-editor .tiptap .doc-link-decoration.is-missing::after {
+  border-color: #fecaca;
+  background: #fef2f2;
+  color: #b91c1c;
 }
 
 /* Images */
@@ -140,3 +234,104 @@
 
 /* Focus outline on the editor boundary */
 .notion-editor .tiptap:focus { outline: none; }
+
+/* ── Callout blocks ── */
+.notion-editor .tiptap .rb-callout-wrapper {
+  margin: 0.6em 0;
+}
+
+.notion-editor .tiptap .rb-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border-left: 4px solid #3b82f6;
+  border-radius: 0 8px 8px 0;
+  padding: 0.6rem 0.75rem 0.6rem 0.65rem;
+  position: relative;
+}
+
+.notion-editor .tiptap .rb-callout-emoji-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-top: 0.05rem;
+}
+
+.notion-editor .tiptap .rb-callout-emoji {
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  border-radius: 4px;
+  transition: transform 0.1s;
+  display: block;
+}
+.notion-editor .tiptap .rb-callout-emoji:hover {
+  transform: scale(1.15);
+}
+
+.notion-editor .tiptap .rb-callout-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 50;
+  display: flex;
+  gap: 2px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+.notion-editor .tiptap .rb-callout-menu-btn {
+  font-size: 1.1rem;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  cursor: pointer;
+  line-height: 1;
+}
+.notion-editor .tiptap .rb-callout-menu-btn:hover,
+.notion-editor .tiptap .rb-callout-menu-btn.active {
+  background: #f3f4f6;
+}
+
+.notion-editor .tiptap .rb-callout-content {
+  flex: 1;
+  min-width: 0;
+}
+.notion-editor .tiptap .rb-callout-content > p:first-child { margin-top: 0; }
+.notion-editor .tiptap .rb-callout-content > p:last-child { margin-bottom: 0; }
+.notion-editor .tiptap .rb-callout-content > *:first-child { margin-top: 0; }
+.notion-editor .tiptap .rb-callout-content > *:last-child { margin-bottom: 0; }
+
+.notion-editor .tiptap .rb-callout-delete {
+  opacity: 0;
+  flex-shrink: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: #9ca3af;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0 2px;
+  border-radius: 4px;
+  align-self: flex-start;
+  margin-top: 0.1rem;
+  transition: opacity 0.15s, color 0.15s;
+}
+.notion-editor .tiptap .rb-callout:hover .rb-callout-delete,
+.notion-editor .tiptap .rb-callout:focus-within .rb-callout-delete {
+  opacity: 1;
+}
+.notion-editor .tiptap .rb-callout-delete:hover {
+  color: #ef4444;
+}
+
+/* selected callout outline */
+.notion-editor .tiptap .ProseMirror-selectednode .rb-callout {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+}

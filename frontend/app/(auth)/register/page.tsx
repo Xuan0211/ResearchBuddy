@@ -1,5 +1,5 @@
 "use client"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { auth } from "@/lib/api"
@@ -7,8 +7,17 @@ import { auth } from "@/lib/api"
 export default function RegisterPage() {
   const router = useRouter()
   const [form, setForm] = useState({ name: "", email: "", password: "" })
+  const [nextPath, setNextPath] = useState("")
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const email = params.get("email")
+    const next = params.get("next")
+    if (email) setForm(prev => ({ ...prev, email }))
+    if (next?.startsWith("/") && !next.startsWith("//")) setNextPath(next)
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -17,7 +26,7 @@ export default function RegisterPage() {
     try {
       const { access_token } = await auth.register(form.email, form.password, form.name)
       auth.saveToken(access_token)
-      router.push("/projects")
+      router.push(nextPath || "/projects")
     } catch (err: any) {
       setError(err.message)
     } finally {

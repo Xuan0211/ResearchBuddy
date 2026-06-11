@@ -17,6 +17,18 @@ class Settings(BaseSettings):
 
     frontend_url: str = "http://localhost:3000"
 
+    # Email
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "ResearchBuddy"
+    smtp_use_ssl: bool = True
+    imap_host: str = ""
+    imap_port: int = 993
+    feedback_notification_email: str = ""
+
     # Google Drive OAuth
     google_client_id: str = ""
     google_client_secret: str = ""

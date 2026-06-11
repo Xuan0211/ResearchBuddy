@@ -142,6 +142,8 @@ export default function DocsPage() {
   const [newFolderName, setNewFolderName] = useState("")
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(["__root__"]))
   const [syncingStructure, setSyncingStructure] = useState(false)
+  const [syncingAll, setSyncingAll] = useState(false)
+  const [syncSummary, setSyncSummary] = useState<string | null>(null)
   const [lastStructureSync, setLastStructureSync] = useState<string | null>(null)
 
   useEffect(() => {
@@ -201,6 +203,24 @@ export default function DocsPage() {
     }
   }
 
+  async function smartSyncAllDocs() {
+    setSyncingAll(true)
+    setSyncSummary(null)
+    try {
+      const res = await api.post<{ total: number; pushed: number; pulled: number; noop: number; failed: number }>(
+        `/api/projects/${projectId}/docs/smart-sync-all`, {}
+      )
+      setSyncSummary(`All docs synced: ${res.pushed} pushed, ${res.pulled} pulled, ${res.noop} unchanged${res.failed ? `, ${res.failed} failed` : ""}.`)
+      const updated = await api.get<(Document & { folder?: string })[]>(`/api/projects/${projectId}/docs`)
+      setDocs(updated)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Sync failed"
+      alert(message)
+    } finally {
+      setSyncingAll(false)
+    }
+  }
+
   function toggleFolder(name: string) {
     setOpenFolders(prev => {
       const next = new Set(prev)
@@ -230,6 +250,14 @@ export default function DocsPage() {
       <div className="flex items-center gap-2">
         <h3 className="font-medium text-sm flex-1">Documents</h3>
         <button
+          onClick={smartSyncAllDocs}
+          disabled={syncingAll}
+          className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-800 border border-gray-200 rounded-lg px-2.5 py-1.5 disabled:opacity-50 transition-colors"
+        >
+          <RefreshCw size={11} className={syncingAll ? "animate-spin" : ""} />
+          {syncingAll ? "Syncing all..." : "Smart sync all"}
+        </button>
+        <button
           onClick={syncStructureFromDrive}
           disabled={syncingStructure}
           title={lastStructureSync ? `Last synced: ${new Date(lastStructureSync).toLocaleString()}` : "Sync folder structure from Drive"}
@@ -249,6 +277,10 @@ export default function DocsPage() {
       </div>
 
       <ModuleResourcesPanel projectId={projectId} section="document" canEdit={true} />
+
+      {syncSummary && (
+        <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">{syncSummary}</p>
+      )}
 
       {/* Create folder inline */}
       {creatingFolder && (

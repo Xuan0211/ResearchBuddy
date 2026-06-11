@@ -11,9 +11,11 @@ from ..core.db import get_session
 from ..core.paths import (
     PAPERS_NOTES_DIR, DOCS_DIR,
     WRITING_BASE, WRITING_MANIFEST, WRITING_AI_BIB, WRITING_REFS_BIB,
+    PAPERS_REFERENCES_BIB,
 )
 from ..core.security import get_current_user
 from ..models import PaperImage, User
+from ..services import document_comments as dc
 from ..services import frontmatter as fm
 from ..services.project_fs import list_project_dir, read_project_file, project_worktree
 from ..services import paper_cache
@@ -21,6 +23,10 @@ from ..services.paper_bib import generate_bibtex, rebuild_papers_bib_files
 from .projects import check_member
 
 router = APIRouter(prefix="/projects/{project_id}/papers", tags=["papers"])
+
+
+class CommentIn(BaseModel):
+    text: str
 
 
 def _slugify(title: str) -> str:
@@ -115,6 +121,51 @@ def _list_all_papers(project_id: str) -> list[dict]:
 
     paper_cache.set(project_id, deduped)
     return deduped
+
+
+@router.get("/bib/status")
+def get_bib_status(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return status of papers/bib/references.read_only.bib."""
+    check_member(project_id, current_user, session)
+    try:
+        content = read_project_file(project_id, PAPERS_REFERENCES_BIB)
+        entry_count = content.count("\n@") + (1 if content.lstrip().startswith("@") else 0)
+        return {"path": PAPERS_REFERENCES_BIB, "entry_count": entry_count, "exists": True}
+    except FileNotFoundError:
+        return {"path": PAPERS_REFERENCES_BIB, "entry_count": 0, "exists": False}
+
+
+@router.get("/bib/content")
+def get_bib_content(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return raw content of papers/bib/references.read_only.bib."""
+    check_member(project_id, current_user, session)
+    try:
+        return {"content": read_project_file(project_id, PAPERS_REFERENCES_BIB)}
+    except FileNotFoundError:
+        return {"content": ""}
+
+
+@router.post("/bib/rebuild")
+def rebuild_bib(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Force-rebuild bib files from papers/notes/*.md."""
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = "Rebuild bib files from papers"
+        stats = rebuild_papers_bib_files(Path(str(wt)))
+    paper_cache.invalidate(project_id)
+    return {"ok": True, "entry_count": stats["references"]}
 
 
 @router.get("/search")
@@ -224,6 +275,62 @@ def get_paper(
         return _paper_public(meta)
     except FileNotFoundError:
         raise HTTPException(404, "Paper not found")
+
+
+@router.get("/{paper_id}/comments")
+def get_paper_comments(
+    project_id: str,
+    paper_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    try:
+        meta = _parse_paper(project_id, f"{PAPERS_NOTES_DIR}/{paper_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+    return {"comments": dc.normalize_comments(meta.get("comments", []))}
+
+
+@router.post("/{paper_id}/comments", status_code=201)
+def create_paper_comment(
+    project_id: str,
+    paper_id: str,
+    body: CommentIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Add paper comment: {paper_id}"
+        path = wt / PAPERS_NOTES_DIR / f"{paper_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.add_comment(meta.get("comments", []), body.text, current_user)
+        fm.write(path, meta, content)
+    paper_cache.invalidate(project_id)
+    return {"comments": meta["comments"]}
+
+
+@router.delete("/{paper_id}/comments/{comment_id}", status_code=204)
+def delete_paper_comment(
+    project_id: str,
+    paper_id: str,
+    comment_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Delete paper comment: {paper_id}"
+        path = wt / PAPERS_NOTES_DIR / f"{paper_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.delete_comment(meta.get("comments", []), comment_id)
+        fm.write(path, meta, content)
+    paper_cache.invalidate(project_id)
 
 
 @router.patch("/{paper_id}")
@@ -469,7 +576,7 @@ async def sync_notes_to_drive(
     project = session.get(Project, project_id)
     notes_body = meta.get("_body", "").strip()
     title = meta.get("title", paper_id)
-    content = f"# {title}\n\n{notes_body}"
+    content = dc.attach_comments_marker(f"# {title}\n\n{notes_body}", meta.get("comments", []))
 
     service = gd.get_service(token, str(current_user.id), session)
     rb_folder = gd.get_or_create_folder(service, "ResearchBuddy")

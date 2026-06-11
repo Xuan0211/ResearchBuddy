@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { RefreshCw, Settings, Download, Search, Image } from "lucide-react"
+import { RefreshCw, Settings, Download, Image, BookMarked, X, RotateCcw } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
 import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
@@ -18,6 +18,8 @@ export default function PapersPage() {
   const [exportingBib, setExportingBib] = useState(false)
   const [syncMsg, setSyncMsg] = useState("")
   const [showZoteroConfig, setShowZoteroConfig] = useState(false)
+  const [bibStatus, setBibStatus] = useState<{ entry_count: number; exists: boolean } | null>(null)
+  const [showBibPreview, setShowBibPreview] = useState(false)
 
   // Filters
   const [search, setSearch] = useState("")
@@ -34,6 +36,9 @@ export default function PapersPage() {
       .finally(() => setLoading(false))
     api.get<Project>(`/api/projects/${projectId}`)
       .then(setProject)
+      .catch(() => {})
+    api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`)
+      .then(setBibStatus)
       .catch(() => {})
   }, [projectId])
 
@@ -97,17 +102,31 @@ export default function PapersPage() {
     if (!project?.zotero_configured) { setShowZoteroConfig(true); return }
     setSyncing(true); setSyncMsg("")
     try {
-      const stats = await api.post<{ created: number; updated: number; skipped: number; total: number }>(
+      const stats = await api.post<{ created: number; updated: number; skipped: number; total: number; bib_entries?: number }>(
         `/api/projects/${projectId}/zotero/sync`
       )
       const updated = await api.get<Paper[]>(`/api/projects/${projectId}/papers`)
       setPapers(updated.filter(p => p.title))
       setProject(await api.get<Project>(`/api/projects/${projectId}`))
-      setSyncMsg(`${stats.total} items — ${stats.created} new · ${stats.updated} updated · ${stats.skipped} skipped`)
+      // refresh bib status
+      api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`)
+        .then(setBibStatus).catch(() => {})
+      const bibNote = stats.bib_entries != null ? ` · bib: ${stats.bib_entries} entries` : ""
+      setSyncMsg(`${stats.total} items — ${stats.created} new · ${stats.updated} updated · ${stats.skipped} skipped${bibNote}`)
     } catch (err: any) {
       setSyncMsg(err.message)
     } finally {
       setSyncing(false)
+    }
+  }
+
+  async function rebuildBib() {
+    try {
+      const res = await api.post<{ ok: boolean; entry_count: number }>(`/api/projects/${projectId}/papers/bib/rebuild`)
+      setBibStatus({ entry_count: res.entry_count, exists: true })
+      setSyncMsg(`BibTeX rebuilt — ${res.entry_count} entries`)
+    } catch (err: any) {
+      setSyncMsg(err.message || "Rebuild failed")
     }
   }
 
@@ -224,8 +243,38 @@ export default function PapersPage() {
           </div>
         </div>
 
+        {/* ── BibTeX sync harness ── */}
+        <div className="flex items-center gap-2 text-[11px] text-gray-500 border-t pt-2">
+          <BookMarked size={12} className="shrink-0 text-gray-400" />
+          <span className="font-mono text-gray-400 truncate">papers/bib/references.read_only.bib</span>
+          {bibStatus ? (
+            <span className={`px-1.5 py-0.5 rounded-full text-[10px] font-medium ${bibStatus.entry_count > 0 ? "bg-green-50 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+              {bibStatus.entry_count} {bibStatus.entry_count === 1 ? "entry" : "entries"}
+            </span>
+          ) : (
+            <span className="text-gray-400">…</span>
+          )}
+          <span className="text-gray-300">·</span>
+          <span className="text-gray-400">auto-updated on every add / Zotero sync</span>
+          <div className="ml-auto flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setShowBibPreview(true)}
+              className="px-2 py-0.5 rounded border text-[10px] hover:bg-gray-50 text-gray-600"
+            >
+              View
+            </button>
+            <button
+              onClick={rebuildBib}
+              title="Force-rebuild bib from papers"
+              className="p-1 rounded border hover:bg-gray-50 text-gray-500"
+            >
+              <RotateCcw size={11} />
+            </button>
+          </div>
+        </div>
+
         {syncMsg && (
-          <p className={`text-xs ${syncMsg.includes("new") ? "text-green-600" : "text-red-600"}`}>{syncMsg}</p>
+          <p className={`text-xs ${syncMsg.includes("new") || syncMsg.includes("rebuilt") ? "text-green-600" : "text-red-600"}`}>{syncMsg}</p>
         )}
       </div>
 
@@ -249,6 +298,13 @@ export default function PapersPage() {
         )}
         <AIPapersPanel projectId={projectId} />
       </div>
+
+      {showBibPreview && (
+        <BibPreviewModal
+          projectId={projectId}
+          onClose={() => setShowBibPreview(false)}
+        />
+      )}
 
       {showZoteroConfig && (
         <ZoteroConfigModal
@@ -439,6 +495,60 @@ function PaperCard({ paper, projectId }: { paper: Paper; projectId: string }) {
   )
 }
 
+function BibPreviewModal({ projectId, onClose }: { projectId: string; onClose: () => void }) {
+  const [content, setContent] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [copied, setCopied] = useState(false)
+
+  useEffect(() => {
+    api.get<{ content: string }>(`/api/projects/${projectId}/papers/bib/content`)
+      .then(r => setContent(r.content))
+      .catch(() => setContent(""))
+      .finally(() => setLoading(false))
+  }, [projectId])
+
+  function copyAll() {
+    if (content) {
+      navigator.clipboard.writeText(content)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-xl shadow-xl w-full max-w-3xl flex flex-col max-h-[80vh]">
+        <div className="flex items-center justify-between px-5 py-3 border-b shrink-0">
+          <div>
+            <p className="font-semibold text-sm">papers/bib/references.read_only.bib</p>
+            <p className="text-[11px] text-gray-500 mt-0.5">Auto-generated from Papers. Do not edit by hand — changes will be overwritten.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={copyAll} disabled={!content}
+              className="text-xs px-2.5 py-1 rounded border hover:bg-gray-50 text-gray-600 disabled:opacity-40">
+              {copied ? "✓ Copied" : "Copy all"}
+            </button>
+            <button onClick={onClose} className="p-1.5 rounded hover:bg-gray-100 text-gray-500">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-4 min-h-0">
+          {loading ? (
+            <p className="text-sm text-gray-400">Loading…</p>
+          ) : !content?.trim() ? (
+            <p className="text-sm text-gray-500">
+              No BibTeX entries yet. Add papers from ArXiv or sync from Zotero to populate this file.
+            </p>
+          ) : (
+            <pre className="text-xs font-mono text-gray-700 whitespace-pre-wrap break-all bg-gray-50 rounded-lg p-3">{content}</pre>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ZoteroConfigModal({ projectId, onClose, onSaved }: { projectId: string; onClose: () => void; onSaved: () => void }) {
   const [form, setForm] = useState({ api_key: "", library_id: "", library_type: "user" })
   const [apiKeySet, setApiKeySet] = useState(false)
@@ -473,34 +583,72 @@ function ZoteroConfigModal({ projectId, onClose, onSaved }: { projectId: string;
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
         <h3 className="font-semibold">Project Zotero Settings</h3>
-        <p className="text-sm text-gray-500">
-          Each project can point at a different Zotero personal or group library. Get your API key from{" "}
-          <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer" className="underline">zotero.org/settings/keys</a>.
-        </p>
+
         {loadingConfig ? <p className="text-sm text-gray-400">Loading…</p> : (
-          <form onSubmit={handleSave} className="space-y-3">
-            <div>
-              <label className="block text-xs font-medium mb-1">
-                API Key {apiKeySet && <span className="text-green-600 font-normal">(already set)</span>}
-              </label>
-              <input value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })}
-                placeholder={apiKeySet ? "Leave blank to keep existing key" : "your-zotero-api-key"}
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black font-mono" />
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1">Library / Group ID</label>
-              <input value={form.library_id} onChange={e => setForm({ ...form, library_id: e.target.value })}
-                placeholder="e.g. group id 1234567" required
-                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
-            </div>
+          <form onSubmit={handleSave} className="space-y-4">
+
+            {/* Library Type — choose first */}
             <div>
               <label className="block text-xs font-medium mb-1">Library Type</label>
               <select value={form.library_type} onChange={e => setForm({ ...form, library_type: e.target.value })}
                 className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none">
-                <option value="user">Personal library</option>
-                <option value="group">Group library</option>
+                <option value="user">User — Personal library</option>
+                <option value="group">Group — Shared team library</option>
               </select>
+              <p className="mt-1 text-[11px] text-gray-400">
+                {form.library_type === "group"
+                  ? "Use a Group library to sync a shared lab or team Zotero collection."
+                  : "Use your personal Zotero library when you manage references yourself."}
+              </p>
             </div>
+
+            {/* Library ID */}
+            <div>
+              <label className="block text-xs font-medium mb-1">
+                {form.library_type === "group" ? "Group ID" : "User ID"}
+              </label>
+              <input value={form.library_id} onChange={e => setForm({ ...form, library_id: e.target.value })}
+                placeholder={form.library_type === "group" ? "e.g. 4567890" : "e.g. 1234567"} required
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black" />
+              <p className="mt-1 text-[11px] text-gray-400">
+                {form.library_type === "group" ? (
+                  <>
+                    Open your group at{" "}
+                    <a href="https://www.zotero.org/groups/" target="_blank" rel="noreferrer" className="text-blue-500 underline">zotero.org/groups</a>
+                    {" "}— the number in the URL is the Group ID.
+                  </>
+                ) : (
+                  <>
+                    Go to{" "}
+                    <a href="https://www.zotero.org/settings/keys" target="_blank" rel="noreferrer" className="text-blue-500 underline">zotero.org/settings/keys</a>
+                    {" "}and look for <em>"Your userID for use in API calls"</em>.
+                  </>
+                )}
+              </p>
+            </div>
+
+            {/* API Key */}
+            <div>
+              <label className="block text-xs font-medium mb-1">
+                API Key {apiKeySet && <span className="text-green-600 font-normal">(already saved)</span>}
+              </label>
+              <input value={form.api_key} onChange={e => setForm({ ...form, api_key: e.target.value })}
+                placeholder={apiKeySet ? "Leave blank to keep existing key" : "your-zotero-api-key"}
+                className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-black font-mono" />
+              <p className="mt-1 text-[11px] text-gray-400">
+                Create a key at{" "}
+                <a href="https://www.zotero.org/settings/keys/new" target="_blank" rel="noreferrer" className="text-blue-500 underline">zotero.org/settings/keys/new</a>
+                {form.library_type === "group"
+                  ? " — enable Allow library access + All Groups Read Only."
+                  : " — enable Allow library access (read-only is enough)."}
+              </p>
+            </div>
+
+            {/* Storage note */}
+            <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2 text-[11px] text-amber-800">
+              Only metadata and abstracts are synced — not PDF files. Zotero storage quota does not apply.
+            </div>
+
             {error && <p className="text-sm text-red-600">{error}</p>}
             <div className="flex gap-2 pt-1">
               <button type="submit" disabled={saving}

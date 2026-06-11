@@ -4,6 +4,7 @@ import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
 import { api } from "@/lib/api"
 import type { Paper } from "@/lib/types"
+import DocumentCommentsPanel from "@/components/DocumentCommentsPanel"
 
 const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
 
@@ -241,6 +242,7 @@ export default function PaperDetailPage() {
           />
         </div>
       </div>
+      <DocumentCommentsPanel projectId={projectId} resource="papers" itemId={paperId} />
     </div>
   )
 }

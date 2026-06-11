@@ -26,7 +26,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     router.push("/login")
   }
 
-  const headerPage = pathname.startsWith("/global-skills") || pathname.startsWith("/help") || pathname.startsWith("/settings")
+  const headerPage = pathname.startsWith("/global-skills") || pathname.startsWith("/help") || pathname.startsWith("/settings") || pathname.startsWith("/feedback")
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -39,6 +39,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             </Link>
           )}
           <Link href="/global-skills" className="text-sm text-gray-500 hover:text-black">Global Skills</Link>
+          <Link href="/feedback" className="text-sm text-gray-500 hover:text-black">Feedback</Link>
           <Link href="/help" className="text-sm text-gray-500 hover:text-black">Help</Link>
           <Link href="/settings" className="text-sm text-gray-500 hover:text-black">Settings</Link>
           <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-black">Sign out</button>

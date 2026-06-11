@@ -6,13 +6,14 @@ import json
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 import frontmatter as frontmatter_lib
 
 from .project_fs import list_project_dir, project_worktree, read_project_file
 from .skills_service import get_skill
 
-ALLOWED_SECTIONS = {"papers", "meetings", "coding", "writing", "document", "images", "prototype", "skills"}
+ALLOWED_SECTIONS = {"papers", "meetings", "coding", "writing", "document", "design", "prototype", "skills"}
 
 _DOCS_SCHEMA = "researchbuddy.module.docs"
 _SKILLS_SCHEMA = "researchbuddy.module.skills"
@@ -54,7 +55,7 @@ def _resource_root(section: str, scope: str = "") -> str:
         "coding": "coding",
         "writing": "writing",
         "document": "document",
-        "images": "images",
+        "design": "design",
         "prototype": "prototype",
         "skills": "skills",
     }[section]
@@ -325,15 +326,38 @@ def update_skill_note(project_id: str, section: str, skill_id: str, note: str, s
     return updated
 
 
-# ── links (unchanged) ─────────────────────────────────────────────────────────
+# ── links ────────────────────────────────────────────────────────────────────
+
+def _title_from_url(kind: str, url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").removeprefix("www.")
+    parts = [unquote(part) for part in parsed.path.split("/") if part]
+
+    if kind == "figma" or host == "figma.com":
+        for index, part in enumerate(parts):
+            if index >= 2 and part not in {"branch", "proto", "design", "file", "board", "slides"}:
+                title = part.replace("-", " ").replace("_", " ").strip()
+                if title:
+                    return title
+        file_key = parts[1] if len(parts) > 1 else (parts[0] if parts else "")
+        return f"Figma {file_key}" if file_key else "Figma link"
+
+    if parts:
+        title = parts[-1].replace("-", " ").replace("_", " ").strip()
+        if title:
+            return title
+    return host or url
 
 def create_link(project_id: str, section: str, kind: str, title: str, url: str, scope: str = "") -> dict[str, str]:
     _check_section(section)
+    kind = kind or "link"
+    url = url.strip()
+    title = title.strip() or _title_from_url(kind, url)
     if not url.startswith(("http://", "https://")):
         raise ValueError("Link URL must start with http:// or https://")
     link = {
         "id": base64.urlsafe_b64encode(uuid.uuid4().bytes).decode("ascii").rstrip("=")[:10],
-        "kind": kind or "link",
+        "kind": kind,
         "title": title or url,
         "url": url,
     }

@@ -12,6 +12,7 @@ from ..core.db import get_session
 from ..core.paths import DOCS_DIR, PAPERS_NOTES_DIR
 from ..core.security import get_current_user
 from ..models import DocumentShare, Project, User
+from ..services import document_comments as dc
 from ..services import document_tabs as dt
 from ..services import frontmatter as fm
 from ..services.project_fs import list_project_dir, read_project_file, project_worktree
@@ -79,6 +80,10 @@ class DriveSyncIn(BaseModel):
     mode: str = "mapped"  # "mapped" | "new" | "existing"
     drive_url: str = ""
     file_id: str = ""
+
+
+class CommentIn(BaseModel):
+    text: str
 
 
 def _share_public_url(token: str) -> str:
@@ -189,6 +194,35 @@ def create_doc(
     return {"id": doc_id}
 
 
+@router.get("/search")
+def search_docs(
+    project_id: str,
+    q: str = "",
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    q_lower = q.lower().strip()
+    paths = list_project_dir(project_id, DOCS_DIR)
+    results = []
+    for p in paths:
+        parts = p.split("/")
+        if not p.endswith(".md") or len(parts) != 3:
+            continue
+        try:
+            d = _parse_doc(project_id, p)
+            haystack = " ".join([str(d.get("id", "")), str(d.get("title", "")), str(d.get("folder", ""))]).lower()
+            if not q_lower or q_lower in haystack:
+                results.append({
+                    "id": d.get("id") or parts[-1].removesuffix(".md"),
+                    "title": d.get("title") or parts[-1].removesuffix(".md"),
+                    "folder": d.get("folder", ""),
+                })
+        except Exception:
+            continue
+    return results[:12]
+
+
 @router.get("/{doc_id}")
 def get_doc(
     project_id: str,
@@ -201,6 +235,60 @@ def get_doc(
         return _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
     except FileNotFoundError:
         raise HTTPException(404)
+
+
+@router.get("/{doc_id}/comments")
+def get_doc_comments(
+    project_id: str,
+    doc_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session)
+    try:
+        doc = _parse_doc(project_id, f"{DOCS_DIR}/{doc_id}.md")
+    except FileNotFoundError:
+        raise HTTPException(404)
+    return {"comments": dc.normalize_comments(doc.get("comments", []))}
+
+
+@router.post("/{doc_id}/comments", status_code=201)
+def create_doc_comment(
+    project_id: str,
+    doc_id: str,
+    body: CommentIn,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Add doc comment: {doc_id}"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.add_comment(meta.get("comments", []), body.text, current_user)
+        fm.write(path, meta, content)
+    return {"comments": meta["comments"]}
+
+
+@router.delete("/{doc_id}/comments/{comment_id}", status_code=204)
+def delete_doc_comment(
+    project_id: str,
+    doc_id: str,
+    comment_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    check_member(project_id, current_user, session, min_role="member")
+    with project_worktree(project_id) as wt:
+        wt.commit_message = f"Delete doc comment: {doc_id}"
+        path = wt / DOCS_DIR / f"{doc_id}.md"
+        if not path.exists():
+            raise HTTPException(404)
+        meta, content = fm.read(path)
+        meta["comments"] = dc.delete_comment(meta.get("comments", []), comment_id)
+        fm.write(path, meta, content)
 
 
 @router.get("/{doc_id}/share")
@@ -643,6 +731,63 @@ async def smart_sync_doc(
             doc_id=doc_id,
             drive_file_id=mapping.drive_file_id if mapping else "",
         )
+
+
+@router.post("/smart-sync-all")
+async def smart_sync_all_docs(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Smart-sync every document in this project with Google Drive."""
+    from ..services import google_drive as gd
+    from ..services import drive_doc_sync
+
+    check_member(project_id, current_user, session, min_role="member")
+    token = gd.load_token(str(current_user.id), session)
+    if not token:
+        raise HTTPException(400, "Google Drive not connected. Go to Settings to connect.")
+
+    paths = list_project_dir(project_id, DOCS_DIR)
+    doc_ids: list[str] = []
+    for p in paths:
+        parts = p.split("/")
+        if p.endswith(".md") and len(parts) == 3:
+            doc_ids.append(parts[-1].removesuffix(".md"))
+
+    result: dict[str, object] = {
+        "total": len(doc_ids),
+        "pushed": 0,
+        "pulled": 0,
+        "noop": 0,
+        "failed": 0,
+        "items": [],
+    }
+    items: list[dict[str, object]] = []
+
+    for doc_id in doc_ids:
+        try:
+            sync_res = drive_doc_sync.smart_sync_doc(
+                session,
+                token,
+                str(current_user.id),
+                project_id,
+                doc_id,
+            )
+            direction = sync_res.get("direction", "noop")
+            if direction == "push":
+                result["pushed"] = int(result["pushed"]) + 1
+            elif direction == "pull":
+                result["pulled"] = int(result["pulled"]) + 1
+            else:
+                result["noop"] = int(result["noop"]) + 1
+            items.append({"id": doc_id, "direction": direction, "drive_link": sync_res.get("drive_link", "")})
+        except Exception as exc:
+            result["failed"] = int(result["failed"]) + 1
+            items.append({"id": doc_id, "direction": "failed", "error": str(exc)[:500]})
+
+    result["items"] = items
+    return result
 
 
 @router.post("/sync-structure-from-drive")

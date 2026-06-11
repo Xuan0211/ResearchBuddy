@@ -55,6 +55,8 @@ export default function MeetingsPage() {
   const [savingSettings, setSavingSettings] = useState(false)
   const [nextMeetingDate, setNextMeetingDate] = useState<string | null>(null)
   const [syncingLog, setSyncingLog] = useState(false)
+  const [syncingAll, setSyncingAll] = useState(false)
+  const [syncSummary, setSyncSummary] = useState<string | null>(null)
   const [logLink, setLogLink] = useState<string | null>(null)
 
   useEffect(() => {
@@ -141,6 +143,26 @@ export default function MeetingsPage() {
       setLogLink(res.drive_link)
     } catch (err: any) { alert(err.message) }
     finally { setSyncingLog(false) }
+  }
+
+  async function smartSyncAllMeetings() {
+    setSyncingAll(true)
+    setSyncSummary(null)
+    try {
+      const res = await api.post<{ total: number; pushed: number; pulled: number; noop: number; failed: number }>(
+        `/api/projects/${projectId}/meetings/smart-sync-all`, {}
+      )
+      setSyncSummary(`All meetings synced: ${res.pushed} pushed, ${res.pulled} pulled, ${res.noop} unchanged${res.failed ? `, ${res.failed} failed` : ""}.`)
+      const updated = await api.get<{ meetings: Meeting[]; next_meeting_date: string | null; settings: MeetingSettings }>(
+        `/api/projects/${projectId}/meetings`
+      )
+      setMeetings(updated.meetings)
+      setNextMeetingDate(updated.next_meeting_date)
+    } catch (err: any) {
+      alert(err.message)
+    } finally {
+      setSyncingAll(false)
+    }
   }
 
   async function createMeeting(e: React.FormEvent) {
@@ -403,12 +425,21 @@ export default function MeetingsPage() {
             <RefreshCw size={11} className={syncingLog ? "animate-spin" : ""} />
             {syncingLog ? "Syncing…" : "Sync Log"}
           </button>
+          <button onClick={smartSyncAllMeetings} disabled={syncingAll}
+            className="inline-flex items-center gap-1.5 text-xs text-gray-500 border px-2 py-1.5 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+            <RefreshCw size={11} className={syncingAll ? "animate-spin" : ""} />
+            {syncingAll ? "Syncing all..." : "Smart sync all"}
+          </button>
           <button onClick={openNewMeeting}
             className="inline-flex items-center gap-1.5 bg-black text-white text-xs px-3 py-1.5 rounded-lg">
             <CalendarPlus size={13} /> New meeting
           </button>
         </div>
       </div>
+
+      {syncSummary && (
+        <p className="rounded-lg bg-blue-50 px-3 py-2 text-xs text-blue-700">{syncSummary}</p>
+      )}
 
       {/* ── New meeting form ── */}
       {showMeetingForm && (

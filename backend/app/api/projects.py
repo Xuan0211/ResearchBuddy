@@ -1,5 +1,6 @@
 import secrets
 import json
+from urllib.parse import urlencode
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
@@ -10,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import func
 from sqlmodel import Session, select
 
+from ..core.config import settings
 from ..core.db import get_session
 from ..core.paths import (
     DOCS_DIR, MEETINGS_DIR,
@@ -19,6 +21,7 @@ from ..core.security import get_current_user
 from ..models import DriveFileMapping, User, Project, ProjectInvite, ProjectMember
 from ..services import git_service
 from ..services.contacts import list_contacts as list_project_contacts, upsert_contact
+from ..services.mail import invite_email_html, send_email
 from ..services.members import ensure_creator_admin, is_project_creator, normalize_email, validate_role
 from ..services.project_fs import list_project_dir, project_worktree, read_project_file
 
@@ -213,6 +216,43 @@ def _save_mapping(
             drive_file_id=drive_file_id,
             drive_link=drive_link,
         ))
+
+
+def _project_url(project_id: str) -> str:
+    return f"{settings.frontend_url.rstrip('/')}/projects/{project_id}/home"
+
+
+def _register_url(email: str, project_id: str) -> str:
+    query = urlencode({"email": email, "next": f"/projects/{project_id}/home"})
+    return f"{settings.frontend_url.rstrip('/')}/register?{query}"
+
+
+def _send_project_invite_email(
+    *,
+    to_email: str,
+    project: Project,
+    inviter: User,
+    role: str,
+    registered: bool,
+) -> bool:
+    project_id = str(project.id)
+    action_url = _project_url(project_id) if registered else _register_url(to_email, project_id)
+    inviter_label = inviter.name or inviter.email
+    text = (
+        f"{inviter_label} invited you to the ResearchBuddy project \"{project.name}\" as {role}.\n\n"
+        + (
+            "Sign in to open the project:\n"
+            if registered
+            else "Create an account with this email address; the project will be added automatically:\n"
+        )
+        + f"{action_url}\n"
+    )
+    return send_email(
+        to=to_email,
+        subject=f"ResearchBuddy invitation: {project.name}",
+        text=text,
+        html=invite_email_html(project.name, inviter_label, role, action_url, registered),
+    )
 
 
 def _sync_tree_to_drive(
@@ -696,6 +736,7 @@ def invite_member(
 
     user = session.exec(select(User).where(func.lower(User.email) == email)).first()
     if user:
+        created_or_updated = False
         existing = session.exec(
             select(ProjectMember).where(
                 ProjectMember.project_id == project_id,
@@ -709,9 +750,11 @@ def invite_member(
                 existing.role = role
             session.add(existing)
             member = existing
+            created_or_updated = True
         else:
             member = ProjectMember(project_id=project.id, user_id=user.id, role="admin" if is_project_creator(project, user.id) else role)
             session.add(member)
+            created_or_updated = True
         for invite in session.exec(
             select(ProjectInvite).where(
                 ProjectInvite.project_id == project_id,
@@ -723,7 +766,15 @@ def invite_member(
             session.add(invite)
         session.commit()
         session.refresh(member)
-        return _member_payload(session, project, member)
+        payload = _member_payload(session, project, member) or {}
+        payload["email_sent"] = _send_project_invite_email(
+            to_email=email,
+            project=project,
+            inviter=current_user,
+            role=member.role,
+            registered=True,
+        ) if created_or_updated else False
+        return payload
 
     existing_invite = session.exec(
         select(ProjectInvite).where(
@@ -748,6 +799,13 @@ def invite_member(
         session.add(invite)
     session.commit()
     session.refresh(invite)
+    email_sent = _send_project_invite_email(
+        to_email=email,
+        project=project,
+        inviter=current_user,
+        role=invite.role,
+        registered=False,
+    )
     return {
         "id": str(invite.id),
         "invite_id": str(invite.id),
@@ -759,6 +817,7 @@ def invite_member(
         "is_creator": False,
         "registered": False,
         "invited_at": invite.created_at,
+        "email_sent": email_sent,
     }
 
 

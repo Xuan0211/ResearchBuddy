@@ -6,6 +6,7 @@ import { Copy, Download, ExternalLink, Plus, Share2, Trash2 } from "lucide-react
 import { api } from "@/lib/api"
 import type { DocumentTab, Meeting } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
+import DocumentCommentsPanel from "@/components/DocumentCommentsPanel"
 
 const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
 
@@ -343,6 +344,7 @@ export default function MeetingDetailPage() {
           />
         </div>
       </main>
+      <DocumentCommentsPanel projectId={projectId} resource="meetings" itemId={mtgId} />
     </div>
   )
 }

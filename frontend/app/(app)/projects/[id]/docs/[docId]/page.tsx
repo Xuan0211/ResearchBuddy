@@ -5,6 +5,7 @@ import dynamic from "next/dynamic"
 import { ArrowDown, ArrowUp, Check, Copy, Download, Plus, RefreshCw, Share2, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document, DocumentTab, Paper } from "@/lib/types"
+import DocumentCommentsPanel from "@/components/DocumentCommentsPanel"
 
 const NotionEditor = dynamic(() => import("@/components/editor/NotionEditor"), { ssr: false })
 
@@ -441,6 +442,7 @@ export default function DocDetailPage() {
           </ul>
         </div>
       )}
+      <DocumentCommentsPanel projectId={projectId} resource="docs" itemId={docId} />
     </div>
   )
 }

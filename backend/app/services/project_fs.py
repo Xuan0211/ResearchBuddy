@@ -22,6 +22,9 @@ class _Worktree:
     def __fspath__(self):
         return str(self._path)
 
+    def __str__(self):
+        return str(self._path)
+
 
 @contextmanager
 def project_worktree(project_id: str):

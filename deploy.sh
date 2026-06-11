@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-SERVER="ubuntu@43.156.12.203"
-DOMAIN="research.hopeyuanxu.com"
+SERVER="ubuntu@43.163.8.22"
+DOMAIN="research.arklab-hkustgz.com"
 EMAIL="mawxuanxuan@gmail.com"
 APP_DIR="/home/ubuntu/researchbuddy"
 LOCAL_DIR="$(cd "$(dirname "$0")" && pwd)"

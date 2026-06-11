@@ -4,7 +4,7 @@ import { ExternalLink, Plus, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { SectionResourceLink, SectionResources } from "@/lib/types"
 
-type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "images" | "prototype"
+type SectionKey = "papers" | "meetings" | "coding" | "workspace" | "writing" | "docs" | "design" | "prototype"
 
 type Props = {
   projectId: string
@@ -14,6 +14,29 @@ type Props = {
   labelPlaceholder: string
   urlPlaceholder: string
   scope?: string
+}
+
+function titleFromUrl(url: string, kind: Props["kind"]) {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.replace(/^www\./, "")
+    const parts = parsed.pathname.split("/").filter(Boolean).map(part => decodeURIComponent(part))
+
+    if (kind === "figma" || host === "figma.com") {
+      const figmaTitle = parts.find((part, index) =>
+        index >= 2 && !["branch", "proto", "design", "file", "board", "slides"].includes(part)
+      )
+      if (figmaTitle) return figmaTitle.replace(/[-_]+/g, " ").trim()
+      const fileKey = parts[1] || parts[0]
+      return fileKey ? `Figma ${fileKey}` : "Figma link"
+    }
+
+    const lastPart = parts.at(-1)
+    if (lastPart) return lastPart.replace(/[-_]+/g, " ").trim()
+    return host || url
+  } catch {
+    return url
+  }
 }
 
 export default function ModuleLinksPanel({
@@ -48,10 +71,12 @@ export default function ModuleLinksPanel({
 
   async function create(e: React.FormEvent) {
     e.preventDefault()
+    const url = form.url.trim()
+    const title = form.title.trim() || titleFromUrl(url, kind)
     await api.post<SectionResourceLink>(resourcePath("/links"), {
       kind,
-      title: form.title,
-      url: form.url,
+      title,
+      url,
     })
     setForm({ title: "", url: "" })
     await load()

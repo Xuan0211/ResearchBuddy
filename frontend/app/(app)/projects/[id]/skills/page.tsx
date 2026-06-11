@@ -14,6 +14,56 @@ import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 const MAX_MB = 10
 
+// ── Markdown renderer (same quality as help docs) ────────────────────────────
+
+const MD_COMPONENTS: Record<string, React.ComponentType<any>> = {
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-4">
+      <table className="min-w-full border-collapse text-sm">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-gray-50">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => <tr className="border-b border-gray-100 even:bg-gray-50/40">{children}</tr>,
+  th: ({ children }) => (
+    <th className="border border-gray-200 px-3 py-2 text-left font-semibold text-gray-700 whitespace-nowrap text-xs">
+      {children}
+    </th>
+  ),
+  td: ({ children }) => (
+    <td className="border border-gray-200 px-3 py-2 text-gray-700 text-sm">{children}</td>
+  ),
+  code: ({ inline, children }: { inline?: boolean; children?: React.ReactNode }) => {
+    if (inline) {
+      return <code className="bg-gray-100 text-gray-800 rounded px-1.5 py-0.5 font-mono text-[12px]">{children}</code>
+    }
+    return (
+      <pre className="bg-gray-50 border border-gray-200 rounded-lg p-4 overflow-x-auto my-3">
+        <code className="font-mono text-[12px] text-gray-800 leading-relaxed">{children}</code>
+      </pre>
+    )
+  },
+  h1: ({ children }) => <h1 className="text-xl font-bold mt-6 mb-3 text-gray-900">{children}</h1>,
+  h2: ({ children }) => <h2 className="text-base font-semibold mt-5 mb-2 text-gray-900 border-b pb-1">{children}</h2>,
+  h3: ({ children }) => <h3 className="text-sm font-semibold mt-4 mb-1.5 text-gray-900">{children}</h3>,
+  p: ({ children }) => <p className="my-2 leading-relaxed text-gray-700 text-sm">{children}</p>,
+  ul: ({ children }) => <ul className="my-2 pl-5 space-y-1 list-disc text-sm text-gray-700">{children}</ul>,
+  ol: ({ children }) => <ol className="my-2 pl-5 space-y-1 list-decimal text-sm text-gray-700">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote className="border-l-4 border-gray-300 pl-4 my-3 text-gray-500 italic text-sm">{children}</blockquote>
+  ),
+  a: ({ href, children }) => (
+    <a href={href} target="_blank" rel="noreferrer" className="text-blue-600 underline underline-offset-2 hover:text-blue-800">{children}</a>
+  ),
+  hr: () => <hr className="my-5 border-gray-200" />,
+  input: ({ type, checked, disabled }) =>
+    type === "checkbox" ? (
+      <input type="checkbox" checked={checked} disabled={disabled} readOnly
+        className="mr-1.5 accent-black align-middle" />
+    ) : null,
+}
+
 // ── Skill templates ───────────────────────────────────────────────────────────
 
 const TEMPLATES: { label: string; tags: string[]; content: string }[] = [
@@ -718,9 +768,11 @@ export default function SkillsPage() {
                       <PackageFilesTree files={(selected as any).package_files} />
                     </div>
                   )}
-                  <div className="px-8 py-6 prose prose-sm max-w-none">
-                    {selected.created_by && <p className="text-xs text-gray-400">Created by {selected.created_by}</p>}
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{selected.content ?? ""}</ReactMarkdown>
+                  <div className="px-8 py-6 max-w-none">
+                    {selected.created_by && <p className="text-xs text-gray-400 mb-3">Created by {selected.created_by}</p>}
+                    <ReactMarkdown remarkPlugins={[remarkGfm]} components={MD_COMPONENTS}>
+                      {selected.content ?? ""}
+                    </ReactMarkdown>
                   </div>
                 </>
               )}
