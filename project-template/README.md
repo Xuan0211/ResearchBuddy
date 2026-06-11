@@ -6,17 +6,19 @@ through these files.
 
 ## Agent Contract
 
-- Edit normal content in `papers/`, `docs/`, `meetings/`, `prototypes/`,
-  `writing/`, `assets/`, `team/`, `skills/`, and `workspace/`.
-- Treat `.researchbuddy/` as system-owned. It stores manifests, indexes, sync
-  maps, locks, and adapter state.
+- **Start here:** Read `project_info/CLAUDE.md` for project context, current
+  priorities, TODOs, and timeline before doing any work.
+- Edit normal content in `papers/`, `document/`, `meetings/`, `prototype/`,
+  `writing/`, `images/`, `coding/`, `skills/`, and `project_info/`.
+- `.researchbuddy/` is **mostly system-owned** — do not edit `*.read_only.*`
+  files. The two exceptions agents may update directly:
+  - `.researchbuddy/todos.json` — TODO board data (keep in sync with `project_info/TODO.md`)
+  - `.researchbuddy/gantt.json` — Gantt data (keep in sync with `project_info/GANTT.md`)
 - Use Markdown with YAML frontmatter for notes and records.
-- Use `[[paper_id]]` for paper/document references.
+- **Meeting files require frontmatter** — see `meetings/mygdocs/README.md` for
+  the exact format. A missing or wrong `id:` field breaks the frontend.
+- Use `[[paper_id]]` for paper/document cross-references.
 - Put LaTeX projects under `writing/`.
-- Put runnable prototypes and experiments under `prototypes/`.
-- Put shared contacts in `team/contacts.json`.
-- Put reusable team/agent playbooks or Codex skills under top-level `skills/`.
-- Put task-local agent context inside the module folder that owns the work:
-  `papers/skills/`, `meetings/docs/`, `prototypes/files/`, or for papers in
-  progress, `writing/<writing_id>/skills/`, `writing/<writing_id>/docs/`, and
-  `writing/<writing_id>/files/`.
+- Put runnable prototypes and experiments under `prototype/`.
+- Put shared contacts in `project_info/contacts.json`.
+- Put reusable agent playbooks or skills under top-level `skills/`.
