@@ -141,6 +141,8 @@ export default function DocsPage() {
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState("")
   const [openFolders, setOpenFolders] = useState<Set<string>>(new Set(["__root__"]))
+  // Tracks folders created explicitly via "Folder" button that may still be empty
+  const [localFolders, setLocalFolders] = useState<Set<string>>(new Set())
   const [syncingStructure, setSyncingStructure] = useState(false)
   const [syncingAll, setSyncingAll] = useState(false)
   const [syncSummary, setSyncSummary] = useState<string | null>(null)
@@ -167,10 +169,18 @@ export default function DocsPage() {
   async function createFolder(e: React.FormEvent) {
     e.preventDefault()
     if (!newFolderName.trim()) return
-    // Open the folder (it will auto-appear when docs are moved into it)
-    setOpenFolders(prev => new Set([...prev, newFolderName.trim()]))
+    const name = newFolderName.trim()
+    // Add to local folders so it appears in the list even while empty
+    setLocalFolders(prev => new Set([...prev, name]))
+    setOpenFolders(prev => new Set([...prev, name]))
     setCreatingFolder(false)
     setNewFolderName("")
+  }
+
+  function openCreateDocInFolder(folder: string) {
+    setNewFolder(folder)
+    setCreating(true)
+    setCreatingFolder(false)
   }
 
   async function moveDoc(docId: string, folder: string) {
@@ -235,7 +245,10 @@ export default function DocsPage() {
     if (!grouped[key]) grouped[key] = []
     grouped[key].push(doc)
   }
-  const folderNames = Object.keys(grouped).sort((a, b) => {
+  // Merge folders from docs + explicitly created empty folders
+  const allFolderKeys = new Set([...Object.keys(grouped), ...localFolders])
+  allFolderKeys.add("__root__")
+  const folderNames = Array.from(allFolderKeys).sort((a, b) => {
     if (a === "__root__") return -1
     if (b === "__root__") return 1
     return a.localeCompare(b)
@@ -270,7 +283,7 @@ export default function DocsPage() {
           className="inline-flex items-center gap-1.5 text-xs text-gray-500 hover:text-black border border-gray-200 rounded-lg px-2.5 py-1.5 transition-colors">
           <FolderPlus size={12} /> Folder
         </button>
-        <button onClick={() => { setCreating(true); setCreatingFolder(false) }}
+        <button onClick={() => { setNewFolder(""); setCreating(true); setCreatingFolder(false) }}
           className="inline-flex items-center gap-1.5 bg-black text-white text-xs px-3 py-1.5 rounded-lg">
           + New doc
         </button>
@@ -316,28 +329,49 @@ export default function DocsPage() {
         </form>
       )}
 
-      {docs.length === 0 ? (
+      {docs.length === 0 && localFolders.size === 0 ? (
         <p className="text-sm text-gray-400">No documents yet.</p>
       ) : (
         <div className="space-y-1">
           {folderNames.map(folderKey => {
             const isRoot = folderKey === "__root__"
             const isOpen = openFolders.has(folderKey)
-            const folderDocs = grouped[folderKey]
             return (
               <div key={folderKey}>
                 {!isRoot && (
-                  <button onClick={() => toggleFolder(folderKey)}
-                    className="flex items-center gap-1.5 w-full py-1.5 px-2 rounded-lg hover:bg-gray-50 text-xs font-medium text-gray-600">
-                    <ChevronRight size={13} className={`transition-transform text-gray-400 ${isOpen ? "rotate-90" : ""}`} />
-                    <Folder size={13} className="text-gray-400" />
-                    {folderKey}
-                    <span className="ml-auto text-[11px] text-gray-400 font-normal">{folderDocs.length}</span>
-                  </button>
+                  <div className="flex items-center group/folder">
+                    <button onClick={() => toggleFolder(folderKey)}
+                      className="flex items-center gap-1.5 flex-1 min-w-0 py-1.5 px-2 rounded-lg hover:bg-gray-50 text-xs font-medium text-gray-600">
+                      <ChevronRight size={13} className={`transition-transform text-gray-400 flex-shrink-0 ${isOpen ? "rotate-90" : ""}`} />
+                      <Folder size={13} className="text-gray-400 flex-shrink-0" />
+                      <span className="truncate">{folderKey}</span>
+                      <span className="ml-auto text-[11px] text-gray-400 font-normal flex-shrink-0">
+                        {(grouped[folderKey] ?? []).length || ""}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => openCreateDocInFolder(folderKey)}
+                      className="opacity-0 group-hover/folder:opacity-100 transition-opacity ml-1 p-1 rounded text-gray-400 hover:text-black hover:bg-gray-100 text-xs flex-shrink-0"
+                      title={`New doc in "${folderKey}"`}
+                    >
+                      +
+                    </button>
+                  </div>
                 )}
                 {(isRoot || isOpen) && (
                   <ul className={`space-y-1 ${!isRoot ? "ml-5 mt-0.5" : ""}`}>
-                    {folderDocs.map(d => (
+                    {(grouped[folderKey] ?? []).length === 0 && !isRoot && (
+                      <li className="px-2 py-2 text-[11px] text-gray-400 italic">
+                        Empty folder —{" "}
+                        <button
+                          className="underline hover:text-gray-600"
+                          onClick={() => openCreateDocInFolder(folderKey)}
+                        >
+                          add a doc
+                        </button>
+                      </li>
+                    )}
+                    {(grouped[folderKey] ?? []).map(d => (
                       <li key={d.id}
                         className="group border border-gray-100 rounded-xl px-4 py-2.5 hover:bg-gray-50 cursor-pointer bg-white shadow-sm transition-colors"
                         onClick={() => router.push(`/projects/${projectId}/docs/${d.id}`)}>
