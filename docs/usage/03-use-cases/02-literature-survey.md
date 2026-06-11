@@ -1,73 +1,72 @@
 ---
-title: 用例：做文献综述（Survey）
+title: 用例：AI 辅助文献综述
 ---
 
-# 用例：做文献综述（Survey）
+# 用例：AI 辅助文献综述
 
-ResearchBuddy 提供了一套完整的 Survey 工作流，从文献收集、筛选、编码到写作一站式完成。
-
-## 完整工作流
-
-### 阶段一：建立文献库
-
-**从 Zotero 导入**：
-1. 在 Zotero 里创建一个专门的 Group Library（如 `SmartAgent-Survey`）
-2. 把候选文献加入这个库
-3. 在 ResearchBuddy 项目 Home → Project Settings → Zotero，绑定这个 Group Library
-4. Papers 页面点击 🔄 同步
-
-**从 ArXiv 直接导入**：
-在 Papers 工具栏输入 ArXiv ID，批量导入目标文献。
+这个用例展示了 ResearchBuddy 在**跨模块联动、人机协同编辑**上的优势——你在 Zotero 里维护文献库，AI Agent 读取论文笔记，生成综述文档，自动推送到云端，你和队友在 ResearchBuddy UI 里直接编辑和使用。
 
 ---
 
-### 阶段二：筛选文献
+## 前置准备
 
-进入 **Coding** 模块，创建一个 Codebook，设置筛选标准：
-
-```
-Inclusion Criteria:
-  - 研究对象是 LLM Agent
-  - 发表于 2022 年后
-  - 全文可获取
-
-Exclusion Criteria:
-  - 纯综述（non-empirical）
-  - 工业白皮书
-```
-
-逐篇在 Screening 界面标记 Included / Excluded，完成后导出 CSV。
+1. 完成 Zotero 绑定，同步论文到 Papers 模块（见[项目基础设置](../01-quick-start/03-project-setup)）
+2. 在 Workspace 页面 clone 项目到本地（见 [Workspace](../02-modules/08-workspace)）
 
 ---
 
-### 阶段三：阅读与编码
+## 操作步骤
 
-对纳入的文献：
-1. 在 Papers 里打开论文详情，写阅读笔记（支持 `[[引用其他论文]]`）
-2. 在 Coding → Excerpt 提取关键摘录，打上编码标签
+### 第 1 步 — 在本地 Agent 中打开项目
 
-:::tip
-在论文笔记里写 `[[另一篇论文的ID]]` 可以建立论文间的关联，点击时弹出摘要卡片。
-:::
+在 Claude Code 或其他本地 Agent 中，选择刚 clone 的项目文件夹：
+
+![在本地 Agent 中打开 clone 的项目文件夹，可以看到完整的目录结构](/api/help-images/uc1-open-project.png)
+
+项目里的 `papers/notes/` 包含你所有的论文笔记（Markdown + BibTeX frontmatter），Agent 可以直接读取。
+
+### 第 2 步 — 输入 Prompt
+
+在 Agent 中输入：
+
+> 阅读文献库里的有关文献，告诉我现在生成式界面的大概情况。形成一个文档。
+
+Agent 会自动：
+- 扫描 `papers/notes/` 下的所有论文
+- 读取摘要、笔记和标签
+- 形成结构化综述文档
+
+### 第 3 步 — 本地查看生成结果
+
+Agent 在本地生成的文档，可以先在终端预览：
+
+![Agent 本地生成的文献综述文档，包含研究背景、核心概念分析、技术路线等结构](/api/help-images/uc1-local-output.png)
+
+### 第 4 步 — 推送到 ResearchBuddy
+
+确认结果后，告诉 Agent：
+
+> 帮我同步到 git 上
+
+Agent 自动执行 `git add`、`git commit`、`git push`：
+
+![Agent 完成 git 推送 — 提交并推送，文件已同步到远端](/api/help-images/uc1-push-to-git.png)
+
+### 第 5 步 — 在 ResearchBuddy 里查看和编辑
+
+刷新 ResearchBuddy，在 **Docs** 模块里就能看到这篇文档：
+
+![ResearchBuddy Docs 中显示 AI 生成的文献综述，可以直接编辑、添加 Callout、引用其他论文](/api/help-images/uc1-rb-doc-result.png)
+
+现在你和队友可以在 ResearchBuddy 的富文本编辑器里直接修改——添加评论、插入 `[[论文引用]]`、改写段落，所有修改都会自动 commit 回 git。
 
 ---
 
-### 阶段四：写综述
+## 跨模块协作
 
-1. 在 **Writing** 模块创建新写作项目
-2. `bibs/references.read_only.bib` 已经同步了你的全部文献库
-3. 在 `sections/` 目录里写各章节的 `.tex` 文件
-4. 用 `\cite{key}` 引用已验证文献，`\aicite{key}` 用于 AI 建议的文献（待确认）
-5. 绑定 Overleaf 随时预览编译结果
+队友 pull 这个项目后，可以：
+- 用自己的 Agent 继续扩展综述
+- 在 Papers 模块打开原始论文查看笔记
+- 在 Writing 模块将综述转成 LaTeX 论文初稿
 
----
-
-### 配合 AI Agent 加速
-
-Clone 项目仓库后，AI Agent 可以：
-
-1. **批量生成论文摘要** — 读取 `papers/notes/*.md`，对每篇补充摘要、关键贡献
-2. **生成综述草稿** — 读取所有笔记 + 编码结果，自动生成各节初稿
-3. **管理引用** — 在 `ai_generated.bib` 里添加未在 Zotero 里的文献
-
-Agent 遵循的规则在 `skills/paper-writing-core/` 和 `skills/citation-management/` 目录里定义，建议先读这两个文件。
+这个工作流的核心是：**Agent 和人类共用同一个 git 仓库，彼此的修改互相可见、可追溯。**

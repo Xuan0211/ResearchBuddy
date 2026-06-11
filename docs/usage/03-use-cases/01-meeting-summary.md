@@ -1,55 +1,75 @@
 ---
-title: 用例：自动总结会议
+title: 用例：AI 生成会议文档
 ---
 
-# 用例：自动总结会议
+# 用例：AI 生成会议文档
 
-ResearchBuddy 可以帮你从会议逐字稿中自动提取关键信息，大幅减少会后整理时间。
+这个用例展示了 ResearchBuddy 在**解决繁杂会议记录、辅助项目管理和团队同步**上的优势——把会议转写稿丢给 Agent，它自动生成会议文档、提取 TODO、推送到 git，你在 ResearchBuddy 里看到整理好的内容。
 
-## 工作流程
+---
 
-### 1. 创建会议
+## 前置准备
 
-进入 **Meetings** → 点击 **+** 新建会议，填写日期、参与者。
+- 已 clone 项目到本地（见 [Workspace](../02-modules/08-workspace)）
+- 从会议工具（Otter.ai、飞书妙记、Zoom、通义听悟等）导出逐字稿文本文件
 
-### 2. 会议中记录逐字稿
+---
 
-在 **Transcript / Notes** 标签页，可以实时粘贴录音转写文本，或者会后统一粘贴。
+## 操作步骤
+
+### 第 1 步 — 把 transcript 放到 resources 目录
+
+在本地 clone 的项目里，把转写文件放到 `meetings/resources/` 目录：
+
+![Finder 中将会议转写文件放入 meetings/resources 目录](/api/help-images/uc2-transcript-resources.png)
 
 :::tip
-大多数录音工具（如 Otter.ai、飞书妙记、通义听悟）都支持导出文字稿，直接粘贴到这里即可。
+`meetings/resources/` 专门用于存放会议相关的资产文件（转写稿、附件、录音等），Agent 知道去这里找原始材料。
 :::
 
-### 3. 触发 AI 分析
+### 第 2 步 — 在 Agent 中输入 Prompt
 
-在 Transcript 标签页，点击工具栏 **AI Analyze** 按钮。
+在 Claude Code 或本地 Agent 里，打开项目，输入：
 
-AI 会自动提取并填充：
+> 帮我总结一下这个会议，总结出会议文档，并且同步到 TODO 里，同步到 git 云端。
 
-| 类别 | 示例 |
-|---|---|
-| 🔑 关键决策 | "确定使用 GPT-4o 作为基础模型" |
-| ✅ 行动项 | "@alice 在周五前完成用户研究访谈大纲" |
-| ❓ 开放问题 | "如何处理多模态输入的延迟问题？" |
+![Claude Code 中输入会议总结 Prompt，Agent 会读取 transcript 并处理所有步骤](/api/help-images/uc2-agent-prompt.png)
 
-提取结果自动写入 **Post-meeting** 标签页。
+Agent 会自动：
+1. 读取 `meetings/resources/` 里的转写文件
+2. 生成结构化会议文档（研究目标、讨论要点、决策、行动项）
+3. 创建 `meetings/mygdocs/<id>.md`
+4. 提取行动项写入 TODO 格式
+5. `git add + commit + push`
 
-### 4. 同步到 Google Drive
+### 第 3 步 — 等待 Agent 完成
 
-点击 **Drive** 按钮，将整个会议（含三个标签页）推送到 Google Drive，方便团队在 Docs 里查阅。
+Agent 运行结束后会显示 commit 完成：
 
-### 5. 更新 MTG Log
+![Agent 完成 git 推送 — 文件已同步到远端](/api/help-images/uc2-git-push-done.png)
 
-在 Meetings 列表页点击 **Sync Log**，Drive 上的 `MTG_LOG` 主文档自动添加这次会议的记录。
+### 第 4 步 — 在 ResearchBuddy 查看 TODO
 
-## 配合 AI Agent 使用
+打开 ResearchBuddy Home 页，**TODO** 区域已经有了从会议中提取的行动项：
 
-会议记录以 Markdown 存储在 `meetings/mygdocs/<id>.md`，AI Agent 可以直接读取：
+![Home 页 TODO — Agent 从会议中提取的行动项，带有负责人和截止时间](/api/help-images/uc2-todo-result.png)
 
-```bash
-# Clone 项目后查看会议记录
-ls meetings/mygdocs/
-cat meetings/mygdocs/<meeting-id>.md
-```
+所有行动项都可以直接在 UI 里编辑、勾选完成、添加截止日期。
 
-Agent 可以进一步对多次会议进行跨会议分析，例如统计某个话题被提到了多少次，或者追踪某个 TODO 的完成情况。
+### 第 5 步 — 在 ResearchBuddy 查看会议文档
+
+切换到 **Meetings** 标签页，完整的会议文档已经出现：
+
+![Meetings 页 — Agent 生成的结构化会议文档，包含 Pre-meeting/Transcript/Post-meeting 三个标签页](/api/help-images/uc2-meeting-doc.png)
+
+文档有完整的三栏结构（Pre-meeting / Transcript / Post-meeting），可以直接在 ResearchBuddy 里继续编辑。
+
+---
+
+## 进一步操作
+
+在 ResearchBuddy 里，你还可以：
+- 点击 **Drive** 同步到 Google Docs，分享给更多人
+- 点击 **AI Analyze** 让 AI 进一步提炼决策和风险
+- 在 Home 的 TODO 里为每个行动项设置负责人
+- 下次会议时，队友 pull 项目就能直接看到所有历史会议记录
