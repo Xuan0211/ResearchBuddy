@@ -8,6 +8,7 @@ interface SuggestionItem {
   authors?: string[]
   year?: number | null
   folder?: string
+  is_ai_pending?: boolean
 }
 
 interface Props {
@@ -69,8 +70,15 @@ export default function WikiLinkSuggestion({ state, projectId, onSelect, onClose
           <code className="text-[10px] text-gray-400 mt-0.5 flex-shrink-0 font-mono">
             {state.mode === "paper" ? `@${p.id.slice(0, 12)}` : "{{}}"}
           </code>
-          <div className="min-w-0">
-            <p className="font-medium text-xs line-clamp-1">{p.title}</p>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <p className="font-medium text-xs line-clamp-1 flex-1">{p.title}</p>
+              {p.is_ai_pending && (
+                <span className="flex-shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold bg-yellow-100 text-yellow-800">
+                  AI
+                </span>
+              )}
+            </div>
             <p className="text-xs text-gray-400 truncate">
               {state.mode === "paper"
                 ? `${p.authors?.[0]?.split(",")[0] ?? ""} ${p.year ? `· ${p.year}` : ""}`

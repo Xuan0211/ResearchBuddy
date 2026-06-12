@@ -205,20 +205,60 @@ def search_papers(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Fast paper search for wiki-link autocomplete. Returns id, title, authors."""
+    """Fast paper search for wiki-link autocomplete.
+
+    Returns confirmed papers (papers/notes/) first, then AI-pending entries
+    from papers/bib/ai-generated.bib that don't yet have a note file.
+    AI-pending results are flagged with is_ai_pending=True so the editor
+    can display them with a visual indicator.
+    """
     check_member(project_id, current_user, session)
     q_lower = q.lower().strip()
-    papers = _list_all_papers(project_id)
+
+    # ── 1. confirmed papers from notes ──
+    confirmed = _list_all_papers(project_id)
+    confirmed_ids = {p["id"] for p in confirmed}
     results = []
-    for p in papers:
-        if not q_lower:
-            results.append(p)
-            continue
-        if (q_lower in p.get("id", "").lower()
-                or q_lower in p.get("title", "").lower()
-                or any(q_lower in a.lower() for a in p.get("authors", []))):
-            results.append(p)
-    return [{"id": p["id"], "title": p["title"], "authors": p.get("authors", []), "year": p.get("year")} for p in results[:12]]
+    for p in confirmed:
+        if not q_lower or (
+            q_lower in p.get("id", "").lower()
+            or q_lower in p.get("title", "").lower()
+            or any(q_lower in a.lower() for a in p.get("authors", []))
+        ):
+            results.append({
+                "id": p["id"], "title": p["title"],
+                "authors": p.get("authors", []), "year": p.get("year"),
+                "is_ai_pending": False,
+            })
+
+    # ── 2. AI-pending entries not yet confirmed ──
+    try:
+        bib_text = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
+        ai_entries = _parse_bibtex_with_provenance(bib_text, PAPERS_AI_GENERATED_BIB)
+        for e in ai_entries:
+            key = e["key"]
+            if key in confirmed_ids:
+                continue  # already has a note — skip
+            title = e.get("title", key)
+            author = e.get("author", "")
+            year_str = e.get("year", "")
+            if q_lower and not (
+                q_lower in key.lower()
+                or q_lower in title.lower()
+                or q_lower in author.lower()
+            ):
+                continue
+            results.append({
+                "id": key,
+                "title": title,
+                "authors": [a.strip() for a in re.split(r"\band\b", author) if a.strip()],
+                "year": int(year_str) if year_str.isdigit() else None,
+                "is_ai_pending": True,
+            })
+    except FileNotFoundError:
+        pass
+
+    return results[:16]
 
 
 @router.get("/export/bib")
