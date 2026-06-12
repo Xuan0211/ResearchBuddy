@@ -404,6 +404,7 @@ export default function NotionEditor({
     active: false, mode: "paper", query: "", range: { from: 0, to: 0 }, rect: null,
   })
   const docIndexRef = useRef<Map<string, { title: string; folder?: string }>>(new Map())
+  const aiPendingKeysRef = useRef<Set<string>>(new Set())
 
   // Peek panel state
   const [peekPaperId, setPeekPaperId] = useState<string | null>(null)
@@ -419,6 +420,7 @@ export default function NotionEditor({
       ? { label: found.title || title || id, missing: false }
       : { label: title || id, missing: true }
   }, [])
+  const getAiPendingKeys = useCallback(() => aiPendingKeysRef.current, [])
 
   const editor = useEditor({
     extensions: [
@@ -441,7 +443,7 @@ export default function NotionEditor({
       Placeholder.configure({ placeholder }),
       Typography,
       ResizableImage.configure({ inline: false, allowBase64: false }),
-      WikiLinkExtension(handleSuggestionState, resolveDocRef),
+      WikiLinkExtension(handleSuggestionState, resolveDocRef, getAiPendingKeys),
     ],
     content,
     editable: !readOnly,
@@ -470,6 +472,18 @@ export default function NotionEditor({
     api.get<Array<{ id: string; title: string; folder?: string }>>(`/api/projects/${projectId}/docs/search`)
       .then(docs => {
         docIndexRef.current = new Map(docs.map(doc => [doc.id, { title: doc.title, folder: doc.folder }]))
+        editor.view.dispatch(editor.state.tr)
+      })
+      .catch(() => {})
+  }, [projectId, editor])
+
+  // Fetch AI-pending citation keys so [[id]] decorations can be coloured red
+  useEffect(() => {
+    if (!projectId || !editor) return
+    api.get<{ keys: string[] }>(`/api/projects/${projectId}/papers/bib/ai-pending-keys`)
+      .then(({ keys }) => {
+        aiPendingKeysRef.current = new Set(keys)
+        // Force ProseMirror to recompute decorations
         editor.view.dispatch(editor.state.tr)
       })
       .catch(() => {})

@@ -48,6 +48,7 @@ const WIKI_LINK_RE = /\[\[([^\]]+)\]\]/g
 const DOC_REF_RE = /\{\{([^}|]+)(?:\|([^}]+))?\}\}/g
 
 type DocResolver = (id: string, title?: string) => { label: string; missing: boolean }
+type AiPendingGetter = () => Set<string>
 
 function findWikiLinkRange(state: EditorState, pos: number, key: "Backspace" | "Delete") {
   const $pos = state.doc.resolve(pos)
@@ -77,6 +78,7 @@ function findWikiLinkRange(state: EditorState, pos: number, key: "Backspace" | "
 export function createWikiLinkPlugin(
   onStateChange: (state: WikiSuggestionState) => void,
   resolveDocRef?: DocResolver,
+  getAiPendingKeys?: AiPendingGetter,
 ) {
   return new Plugin({
     key: wikiSuggestionKey,
@@ -145,11 +147,13 @@ export function createWikiLinkPlugin(
           let m: RegExpExecArray | null
           WIKI_LINK_RE.lastIndex = 0
           while ((m = WIKI_LINK_RE.exec(text))) {
+            const paperId = m[1]
+            const isPending = getAiPendingKeys?.().has(paperId) ?? false
             decos.push(
               Decoration.inline(pos + m.index, pos + m.index + m[0].length, {
-                class: "wiki-link-decoration",
-                "data-paper-id": m[1],
-                "data-wiki-label": m[1],
+                class: isPending ? "wiki-link-decoration is-ai-pending" : "wiki-link-decoration",
+                "data-paper-id": paperId,
+                "data-wiki-label": paperId,
               })
             )
           }
@@ -190,12 +194,13 @@ export function createWikiLinkPlugin(
 export const WikiLinkExtension = (
   onStateChange: (state: WikiSuggestionState) => void,
   resolveDocRef?: DocResolver,
+  getAiPendingKeys?: AiPendingGetter,
 ) =>
   Extension.create({
     name: "wikiLinkExtension",
 
     addProseMirrorPlugins() {
-      return [createWikiLinkPlugin(onStateChange, resolveDocRef)]
+      return [createWikiLinkPlugin(onStateChange, resolveDocRef, getAiPendingKeys)]
     },
 
     addKeyboardShortcuts() {

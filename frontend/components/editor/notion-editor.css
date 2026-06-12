@@ -218,6 +218,13 @@
   color: #b91c1c;
 }
 
+/* AI-generated / unconfirmed paper citation — shown in orange-red */
+.notion-editor .tiptap .wiki-link-decoration.is-ai-pending::after {
+  border-color: #fca5a5;
+  background: #fff1f0;
+  color: #b91c1c;
+}
+
 /* Images */
 .notion-editor .tiptap img {
   max-width: 100%;

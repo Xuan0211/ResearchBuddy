@@ -11,7 +11,7 @@ from ..core.db import get_session
 from ..core.paths import (
     PAPERS_NOTES_DIR, DOCS_DIR,
     WRITING_BASE, WRITING_MANIFEST, WRITING_AI_BIB, WRITING_REFS_BIB,
-    PAPERS_REFERENCES_BIB,
+    PAPERS_REFERENCES_BIB, PAPERS_AI_GENERATED_BIB,
 )
 from ..core.security import get_current_user
 from ..models import PaperImage, User
@@ -131,6 +131,26 @@ def _list_all_papers(project_id: str) -> list[dict]:
 
     paper_cache.set(project_id, deduped)
     return deduped
+
+
+@router.get("/bib/ai-pending-keys")
+def get_ai_pending_keys(
+    project_id: str,
+    current_user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """Return the set of BibTeX keys currently in papers/bib/ai-generated.bib.
+
+    Used by the frontend to colour [[paper_id]] citations red when the
+    referenced paper is still AI-generated (not yet confirmed).
+    """
+    check_member(project_id, current_user, session)
+    try:
+        content = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
+        keys = re.findall(r"@\w+\{([^,\s]+)\s*,", content)
+        return {"keys": keys}
+    except FileNotFoundError:
+        return {"keys": []}
 
 
 @router.get("/bib/status")
