@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { RefreshCw, Settings, Download, Image, BookMarked, X, RotateCcw, ChevronDown, ChevronRight } from "lucide-react"
+import { RefreshCw, Settings, Download, Image, BookMarked, X, RotateCcw, ChevronDown, ChevronRight, Check } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
 import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
@@ -452,9 +452,13 @@ export function AIPapersPanel({ projectId, onConfirmed, refreshToken }: { projec
                       <button
                         onClick={() => confirm(e)}
                         disabled={confirming === e.key}
-                        className="w-full rounded bg-green-600 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                        title="Confirm — add to library"
+                        className="w-full flex items-center justify-center gap-1.5 rounded border border-gray-300 py-1 text-xs text-gray-700 hover:bg-gray-900 hover:text-white hover:border-gray-900 transition-colors disabled:opacity-40"
                       >
-                        {confirming === e.key ? "Confirming…" : "✓ Confirm — add to library"}
+                        {confirming === e.key
+                          ? <RefreshCw size={11} className="animate-spin" />
+                          : <Check size={11} />}
+                        <span>{confirming === e.key ? "Confirming…" : "Confirm"}</span>
                       </button>
                     </div>
                   </div>

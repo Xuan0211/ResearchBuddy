@@ -133,24 +133,40 @@ def _list_all_papers(project_id: str) -> list[dict]:
     return deduped
 
 
+def _read_ai_bibs_from_writing(project_id: str) -> list[tuple[str, str]]:
+    """Return list of (writing_id, bib_text) for all writing projects with an AI bib."""
+    ai_bib_suffix = "/" + WRITING_AI_BIB
+    results = []
+    for path in list_project_dir(project_id, WRITING_BASE):
+        if not path.endswith(ai_bib_suffix):
+            continue
+        parts = path.split("/")
+        if len(parts) < 3:
+            continue
+        writing_id = parts[2]
+        try:
+            results.append((writing_id, read_project_file(project_id, path)))
+        except FileNotFoundError:
+            continue
+    return results
+
+
 @router.get("/bib/ai-pending-keys")
 def get_ai_pending_keys(
     project_id: str,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Return the set of BibTeX keys currently in papers/bib/ai-generated.bib.
+    """Return BibTeX keys from all writing project AI bibs (live, bypasses mirror).
 
     Used by the frontend to colour [[paper_id]] citations red when the
     referenced paper is still AI-generated (not yet confirmed).
     """
     check_member(project_id, current_user, session)
-    try:
-        content = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
-        keys = re.findall(r"@\w+\{([^,\s]+)\s*,", content)
-        return {"keys": keys}
-    except FileNotFoundError:
-        return {"keys": []}
+    keys: list[str] = []
+    for _, bib_text in _read_ai_bibs_from_writing(project_id):
+        keys.extend(re.findall(r"@\w+\{([^,\s]+)\s*,", bib_text))
+    return {"keys": list(dict.fromkeys(keys))}
 
 
 @router.get("/bib/status")
@@ -338,13 +354,16 @@ def list_ai_papers(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Read AI-pending citations from papers/bib/ai-generated.bib (the project-level mirror)."""
+    """Read AI-pending citations live from writing project bibs (bypasses mirror)."""
     check_member(project_id, current_user, session)
-    try:
-        bib_text = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
-    except FileNotFoundError:
-        return []
-    return _parse_bibtex_with_provenance(bib_text, PAPERS_AI_GENERATED_BIB)
+    entries: list[dict] = []
+    seen: dict[str, dict] = {}
+    for writing_id, bib_text in _read_ai_bibs_from_writing(project_id):
+        bib_path = f"{WRITING_BASE}/{writing_id}/{WRITING_AI_BIB}"
+        for e in _parse_bibtex_entries(bib_text, writing_id, bib_path):
+            e["writing_id"] = writing_id
+            seen[e["key"]] = e
+    return list(seen.values())
 
 
 class AIBibAddIn(BaseModel):
