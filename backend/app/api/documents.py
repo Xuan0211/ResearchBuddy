@@ -171,6 +171,8 @@ def list_docs(
         parts = p.split("/")
         if not p.endswith(".md") or len(parts) != 3:
             continue
+        if parts[-1].lower() == "readme.md":
+            continue
         try:
             d = _parse_doc(project_id, p)
             docs.append({k: v for k, v in d.items() if k != "_body"})

@@ -1,7 +1,9 @@
+import uuid as _uuid
 from html import escape
+from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
@@ -115,3 +117,31 @@ def toggle_feedback_vote(
     session.commit()
     session.refresh(post)
     return _post_payload(session, post, current_user)
+
+
+_FEEDBACK_IMG_ALLOWED = {
+    "image/png": ".png", "image/jpeg": ".jpg",
+    "image/gif": ".gif", "image/webp": ".webp",
+}
+
+
+@router.post("/images")
+async def upload_feedback_image(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    ct = (file.content_type or "").lower()
+    ext = _FEEDBACK_IMG_ALLOWED.get(ct)
+    if not ext:
+        fn = file.filename or ""
+        for e in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+            if fn.lower().endswith(e):
+                ext = e if e != ".jpeg" else ".jpg"
+                break
+    if not ext:
+        raise HTTPException(400, "File must be PNG/JPEG/GIF/WebP")
+    filename = f"{_uuid.uuid4().hex}{ext}"
+    dest_dir = settings.images_dir / "feedback"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (dest_dir / filename).write_bytes(await file.read())
+    return {"url": f"/api/images/feedback/{filename}"}

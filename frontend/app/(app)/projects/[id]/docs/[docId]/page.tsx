@@ -1,8 +1,8 @@
 "use client"
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
-import { ArrowDown, ArrowUp, Check, Copy, Download, Plus, RefreshCw, Share2, Trash2, X } from "lucide-react"
+import { ArrowDown, ArrowUp, Check, Copy, Download, Pencil, Plus, RefreshCw, Share2, Trash2, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document, DocumentTab, Paper } from "@/lib/types"
 import DocumentCommentsPanel from "@/components/DocumentCommentsPanel"
@@ -36,6 +36,13 @@ export default function DocDetailPage() {
   const [shareOpen, setShareOpen] = useState(false)
   const [shareBusy, setShareBusy] = useState(false)
   const [copiedShare, setCopiedShare] = useState(false)
+  // Inline tab name editing
+  const [newTabInput, setNewTabInput] = useState("")
+  const [addingTab, setAddingTab] = useState(false)
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState("")
+  const newTabRef = useRef<HTMLInputElement>(null)
+  const renameRef = useRef<HTMLInputElement>(null)
 
   function localShareUrl(next: ShareState | null) {
     if (!next?.token) return ""
@@ -222,25 +229,32 @@ export default function DocDetailPage() {
     a.click()
   }
 
-  async function addTab() {
-    const title = prompt("Tab title")
-    if (!title?.trim()) return
+  async function commitAddTab() {
+    const title = newTabInput.trim()
+    if (!title) { setAddingTab(false); return }
     const res = await api.post<{ tabs: DocumentTab[] }>(`/api/projects/${projectId}/docs/${docId}/tabs`, {
-      title: title.trim(),
+      title,
     })
     setDoc(prev => prev ? { ...prev, tabs: res.tabs } : prev)
     setActiveTabId(res.tabs.at(-1)?.id ?? activeTabId)
+    setNewTabInput("")
+    setAddingTab(false)
   }
 
-  async function renameTab(tab: DocumentTab) {
-    const title = prompt("Tab title", tab.title)
-    if (!title?.trim() || title === tab.title) return
+  async function commitRenameTab(tab: DocumentTab) {
+    const title = renameDraft.trim()
+    setRenamingTabId(null)
+    if (!title || title === tab.title) return
     const res = await api.patch<{ tabs: DocumentTab[] }>(
       `/api/projects/${projectId}/docs/${docId}/tabs/${tab.id}`,
-      { title: title.trim() },
+      { title },
     )
     setDoc(prev => prev ? { ...prev, tabs: res.tabs } : prev)
   }
+
+  // Keep legacy names for compatibility with the rest of the handlers
+  const addTab = () => { setAddingTab(true); setTimeout(() => newTabRef.current?.focus(), 50) }
+  const renameTab = (tab: DocumentTab) => { setRenamingTabId(tab.id); setRenameDraft(tab.title); setTimeout(() => renameRef.current?.focus(), 50) }
 
   async function deleteTab(tab: DocumentTab) {
     if ((doc?.tabs?.length ?? 0) <= 1) return alert("A document needs at least one tab.")
@@ -386,27 +400,64 @@ export default function DocDetailPage() {
         <div className="border-b bg-white px-6 py-2 flex items-center gap-1 overflow-x-auto">
           {tabs.map(tab => (
             <div key={tab.id} className="group inline-flex items-center">
-              <button
-                onClick={() => setActiveTabId(tab.id)}
-                onDoubleClick={() => renameTab(tab)}
-                className={`rounded-md px-3 py-1.5 text-xs whitespace-nowrap ${
-                  activeTab.id === tab.id ? "bg-black text-white" : "text-gray-600 hover:bg-gray-100"
-                }`}
-              >
-                {tab.title}
-              </button>
-              {tabs.length > 1 && activeTab.id === tab.id && (
-                <button onClick={() => deleteTab(tab)}
-                  className="ml-1 hidden rounded p-1 text-gray-300 hover:text-red-600 group-hover:inline-flex">
-                  <Trash2 size={11} />
+              {renamingTabId === tab.id ? (
+                <input
+                  ref={renameRef}
+                  value={renameDraft}
+                  onChange={e => setRenameDraft(e.target.value)}
+                  onBlur={() => commitRenameTab(tab)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") commitRenameTab(tab)
+                    if (e.key === "Escape") setRenamingTabId(null)
+                  }}
+                  className="rounded-md border border-black px-2 py-1 text-xs w-28 outline-none"
+                />
+              ) : (
+                <button
+                  onClick={() => setActiveTabId(tab.id)}
+                  onDoubleClick={() => renameTab(tab)}
+                  className={`rounded-md px-3 py-1.5 text-xs whitespace-nowrap ${
+                    activeTab.id === tab.id ? "bg-black text-white" : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  {tab.title}
                 </button>
+              )}
+              {activeTab.id === tab.id && renamingTabId !== tab.id && (
+                <div className="ml-0.5 hidden items-center gap-0.5 group-hover:inline-flex">
+                  <button onClick={() => renameTab(tab)}
+                    className="rounded p-1 text-gray-300 hover:text-gray-600">
+                    <Pencil size={10} />
+                  </button>
+                  {tabs.length > 1 && (
+                    <button onClick={() => deleteTab(tab)}
+                      className="rounded p-1 text-gray-300 hover:text-red-600">
+                      <Trash2 size={10} />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           ))}
-          <button onClick={addTab}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
-            <Plus size={12} /> Tab
-          </button>
+          {addingTab ? (
+            <input
+              ref={newTabRef}
+              value={newTabInput}
+              onChange={e => setNewTabInput(e.target.value)}
+              onBlur={commitAddTab}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitAddTab()
+                if (e.key === "Escape") { setAddingTab(false); setNewTabInput("") }
+              }}
+              placeholder="Tab title"
+              className="rounded-md border border-black px-2 py-1 text-xs w-24 outline-none"
+            />
+          ) : (
+            <button onClick={addTab}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
+              <Plus size={12} /> Tab
+            </button>
+          )}
         </div>
 
         {/* Editor */}

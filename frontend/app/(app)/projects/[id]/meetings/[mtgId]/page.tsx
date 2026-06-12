@@ -1,8 +1,8 @@
 "use client"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
 import dynamic from "next/dynamic"
-import { Copy, Download, ExternalLink, Plus, Share2, Trash2 } from "lucide-react"
+import { Copy, Download, ExternalLink, Pencil, Plus, Share2, Trash2 } from "lucide-react"
 import { api } from "@/lib/api"
 import type { DocumentTab, Meeting } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
@@ -27,8 +27,13 @@ export default function MeetingDetailPage() {
   const [editingTitle, setEditingTitle] = useState(false)
   const [metaDraft, setMetaDraft] = useState({ date: "", start_time: "", end_time: "", location: "", attendees: "" })
   const [activeTabId, setActiveTabId] = useState("")
-  const [transcriptDraft, setTranscriptDraft] = useState("")
-  const [analyzingTranscript, setAnalyzingTranscript] = useState(false)
+  // Inline tab name editing
+  const [newTabInput, setNewTabInput] = useState("")
+  const [addingTab, setAddingTab] = useState(false)
+  const [renamingTabId, setRenamingTabId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState("")
+  const newTabRef = useRef<HTMLInputElement>(null)
+  const renameRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     Promise.all([
@@ -145,22 +150,25 @@ export default function MeetingDetailPage() {
     router.push(`/projects/${projectId}/meetings`)
   }
 
-  async function addTab() {
-    const title = prompt("Tab title")
-    if (!title?.trim()) return
+  async function commitAddTab() {
+    const title = newTabInput.trim()
+    if (!title) { setAddingTab(false); return }
     const res = await api.post<{ tabs: DocumentTab[] }>(`/api/projects/${projectId}/meetings/${mtgId}/tabs`, {
-      title: title.trim(),
+      title,
     })
     setMeeting(prev => prev ? { ...prev, tabs: res.tabs } : prev)
     setActiveTabId(res.tabs.at(-1)?.id ?? activeTabId)
+    setNewTabInput("")
+    setAddingTab(false)
   }
 
-  async function renameTab(tab: DocumentTab) {
-    const title = prompt("Tab title", tab.title)
-    if (!title?.trim() || title === tab.title) return
+  async function commitRenameTab(tab: DocumentTab) {
+    const title = renameDraft.trim()
+    setRenamingTabId(null)
+    if (!title || title === tab.title) return
     const res = await api.patch<{ tabs: DocumentTab[] }>(
       `/api/projects/${projectId}/meetings/${mtgId}/tabs/${tab.id}`,
-      { title: title.trim() },
+      { title },
     )
     setMeeting(prev => prev ? { ...prev, tabs: res.tabs } : prev)
   }
@@ -174,25 +182,8 @@ export default function MeetingDetailPage() {
     setActiveTabId(updated.tabs?.[0]?.id ?? "pre-meeting")
   }
 
-  async function analyzeTranscript() {
-    if (!transcriptDraft.trim()) return
-    setAnalyzingTranscript(true)
-    try {
-      const res = await api.post<{ tabs: DocumentTab[] }>(
-        `/api/projects/${projectId}/meetings/${mtgId}/analyze-transcript`,
-        { transcript: transcriptDraft },
-      )
-      setMeeting(prev => prev ? { ...prev, tabs: res.tabs } : prev)
-      setActiveTabId("transcript-notes")
-      setTranscriptDraft("")
-      setSaved(true)
-      setTimeout(() => setSaved(false), 1600)
-    } catch (err: any) {
-      alert(err.message)
-    } finally {
-      setAnalyzingTranscript(false)
-    }
-  }
+  const addTab = () => { setAddingTab(true); setTimeout(() => newTabRef.current?.focus(), 50) }
+  const renameTab = (tab: DocumentTab) => { setRenamingTabId(tab.id); setRenameDraft(tab.title); setTimeout(() => renameRef.current?.focus(), 50) }
 
   if (loading) return <div className="p-8 text-sm text-gray-500">Loading meeting…</div>
   if (!meeting) return <div className="p-8 text-sm text-red-500">Meeting not found</div>
@@ -268,26 +259,6 @@ export default function MeetingDetailPage() {
             <Trash2 size={11} /> Delete meeting
           </button>
         </div>
-        <div className="space-y-2">
-          <p className="text-xs font-medium text-gray-500">Transcript analysis</p>
-          <textarea
-            value={transcriptDraft}
-            onChange={e => setTranscriptDraft(e.target.value)}
-            placeholder="Paste transcript"
-            rows={7}
-            className="w-full resize-none rounded-md border px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-black"
-          />
-          <button
-            onClick={analyzeTranscript}
-            disabled={analyzingTranscript || !transcriptDraft.trim()}
-            className="w-full rounded-md border px-2 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-          >
-            {analyzingTranscript ? "Analyzing…" : "Analyze into meeting doc"}
-          </button>
-          <p className="text-[11px] leading-4 text-gray-400">
-            Uses the default meeting skill; generated notes stay editable.
-          </p>
-        </div>
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden">
@@ -312,27 +283,64 @@ export default function MeetingDetailPage() {
         <div className="border-b bg-white px-6 py-2 flex items-center gap-1 overflow-x-auto">
           {tabs.map(tab => (
             <div key={tab.id} className="group inline-flex items-center">
-              <button
-                onClick={() => setActiveTabId(tab.id)}
-                onDoubleClick={() => renameTab(tab)}
-                className={`rounded-md px-3 py-1.5 text-xs whitespace-nowrap ${
-                  activeTab.id === tab.id ? "bg-black text-white" : "text-gray-600 hover:bg-gray-100"
-                }`}
-              >
-                {tab.title}
-              </button>
-              {tabs.length > 1 && activeTab.id === tab.id && (
-                <button onClick={() => deleteTab(tab)}
-                  className="ml-1 hidden rounded p-1 text-gray-300 hover:text-red-600 group-hover:inline-flex">
-                  <Trash2 size={11} />
+              {renamingTabId === tab.id ? (
+                <input
+                  ref={renameRef}
+                  value={renameDraft}
+                  onChange={e => setRenameDraft(e.target.value)}
+                  onBlur={() => commitRenameTab(tab)}
+                  onKeyDown={e => {
+                    if (e.key === "Enter") commitRenameTab(tab)
+                    if (e.key === "Escape") setRenamingTabId(null)
+                  }}
+                  className="rounded-md border border-black px-2 py-1 text-xs w-28 outline-none"
+                />
+              ) : (
+                <button
+                  onClick={() => setActiveTabId(tab.id)}
+                  onDoubleClick={() => renameTab(tab)}
+                  className={`rounded-md px-3 py-1.5 text-xs whitespace-nowrap ${
+                    activeTab.id === tab.id ? "bg-black text-white" : "text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  {tab.title}
                 </button>
+              )}
+              {activeTab.id === tab.id && renamingTabId !== tab.id && (
+                <div className="ml-0.5 hidden items-center gap-0.5 group-hover:inline-flex">
+                  <button onClick={() => renameTab(tab)}
+                    className="rounded p-1 text-gray-300 hover:text-gray-600">
+                    <Pencil size={10} />
+                  </button>
+                  {tabs.length > 1 && (
+                    <button onClick={() => deleteTab(tab)}
+                      className="rounded p-1 text-gray-300 hover:text-red-600">
+                      <Trash2 size={10} />
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           ))}
-          <button onClick={addTab}
-            className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
-            <Plus size={12} /> Tab
-          </button>
+          {addingTab ? (
+            <input
+              ref={newTabRef}
+              value={newTabInput}
+              onChange={e => setNewTabInput(e.target.value)}
+              onBlur={commitAddTab}
+              onKeyDown={e => {
+                if (e.key === "Enter") commitAddTab()
+                if (e.key === "Escape") { setAddingTab(false); setNewTabInput("") }
+              }}
+              placeholder="Tab title"
+              className="rounded-md border border-black px-2 py-1 text-xs w-24 outline-none"
+            />
+          ) : (
+            <button onClick={addTab}
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-gray-500 hover:bg-gray-100">
+              <Plus size={12} /> Tab
+            </button>
+          )}
         </div>
         <div className="flex-1 overflow-y-auto">
           <NotionEditor
