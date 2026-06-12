@@ -326,7 +326,7 @@ async def create_paper(
         body.setdefault("preview_image", "")
         body.setdefault("source", "manual")
         fm.write(paper_path, body, "\n## Notes\n\n\n## Related\n\n")
-        rebuild_papers_bib_files(Path(str(wt)))
+        rebuild_papers_bib_files(Path(str(wt)), rebuild_ai=False)
 
     paper_cache.invalidate(project_id)
     return {"id": paper_id}
@@ -554,7 +554,7 @@ def update_paper(
         if notes is not None:
             meta, _ = fm.read(paper_path)
             fm.write(paper_path, meta, f"\n## Notes\n\n{notes}\n")
-        rebuild_papers_bib_files(Path(str(wt)))
+        rebuild_papers_bib_files(Path(str(wt)), rebuild_ai=False)
 
     paper_cache.invalidate(project_id)
     return {"ok": True}

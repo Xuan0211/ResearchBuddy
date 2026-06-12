@@ -341,6 +341,9 @@ def update_writing_file(
         if not file.exists():
             raise HTTPException(404)
         file.write_text(body.content, encoding="utf-8")
+        if path == WRITING_AI_BIB:
+            from ..services.paper_bib import rebuild_papers_bib_files
+            rebuild_papers_bib_files(Path(str(wt)))
     return {"ok": True}
 
 
@@ -467,5 +470,8 @@ def github_pull_writing(
                     dest = writing_path / rel
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(item, dest)
+
+            from ..services.paper_bib import rebuild_papers_bib_files
+            rebuild_papers_bib_files(Path(str(wt)))
 
     return {"ok": True, "message": f"Pulled from {github_url}"}

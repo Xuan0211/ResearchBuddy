@@ -21,6 +21,7 @@ export default function PapersPage() {
   const [bibStatus, setBibStatus] = useState<{ entry_count: number; exists: boolean } | null>(null)
   const [showBibPreview, setShowBibPreview] = useState(false)
   const [autoSyncing, setAutoSyncing] = useState(false)
+  const [aiRefreshToken, setAiRefreshToken] = useState(0)
 
   // Filters
   const [search, setSearch] = useState("")
@@ -67,6 +68,7 @@ export default function PapersPage() {
           const bibNote = stats.bib_entries != null ? ` · bib: ${stats.bib_entries} entries` : ""
           setSyncMsg(`Auto-synced Zotero: ${stats.created} new · ${stats.updated} updated · ${stats.skipped} skipped${bibNote}`)
           await refreshPapersAndBib()
+          if (!cancelled) setAiRefreshToken(t => t + 1)
         } catch {
           // Silently ignore auto-sync failures
         } finally {
@@ -131,6 +133,7 @@ export default function PapersPage() {
       setArxivInput("")
       const updated = await api.get<Paper[]>(`/api/projects/${projectId}/papers`)
       setPapers(updated.filter(p => p.title))
+      setAiRefreshToken(t => t + 1)
     } finally {
       setImporting(false)
     }
@@ -149,6 +152,7 @@ export default function PapersPage() {
       // refresh bib status
       api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`)
         .then(setBibStatus).catch(() => {})
+      setAiRefreshToken(t => t + 1)
       const bibNote = stats.bib_entries != null ? ` · bib: ${stats.bib_entries} entries` : ""
       setSyncMsg(`${stats.total} items — ${stats.created} new · ${stats.updated} updated · ${stats.skipped} skipped${bibNote}`)
     } catch (err: any) {
@@ -334,7 +338,11 @@ export default function PapersPage() {
             </div>
           ))
         )}
-        <AIPapersPanel projectId={projectId} onConfirmed={refreshPapersAndBib} />
+        <AIPapersPanel
+          projectId={projectId}
+          onConfirmed={() => { refreshPapersAndBib(); setAiRefreshToken(t => t + 1) }}
+          refreshToken={aiRefreshToken}
+        />
       </div>
 
       {showBibPreview && (
@@ -365,16 +373,18 @@ interface AIEntry {
   doi: string; url: string; writing_id: string; bib_path: string
 }
 
-export function AIPapersPanel({ projectId, onConfirmed }: { projectId: string; onConfirmed?: () => void }) {
+export function AIPapersPanel({ projectId, onConfirmed, refreshToken }: { projectId: string; onConfirmed?: () => void; refreshToken?: number }) {
   const [entries, setEntries] = useState<AIEntry[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [open, setOpen] = useState(true)  // expanded by default
+  const [open, setOpen] = useState(true)
   const [confirming, setConfirming] = useState<string | null>(null)
 
   useEffect(() => {
+    setLoaded(false)
     api.get<AIEntry[]>(`/api/projects/${projectId}/papers/ai-generated`)
       .then(e => { setEntries(e); setLoaded(true) }).catch(() => setLoaded(true))
-  }, [projectId])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId, refreshToken])
 
   async function confirm(e: AIEntry) {
     setConfirming(e.key)
