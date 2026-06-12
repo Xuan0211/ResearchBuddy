@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useParams, useRouter } from "next/navigation"
-import { ChevronRight, Folder, FolderPlus, MoreHorizontal, RefreshCw, X } from "lucide-react"
+import { ChevronRight, Folder, FolderPlus, MoreHorizontal, Plus, RefreshCw, X } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Document } from "@/lib/types"
 import DriveSyncControls from "@/components/DriveSyncControls"
@@ -126,6 +126,73 @@ function DocMenu({
         <MoreHorizontal size={14} />
       </button>
       {menu}
+    </div>
+  )
+}
+
+/** Inline tag editor shown in the docs list. */
+function TagEditor({
+  docId, projectId, tags, onUpdate,
+}: {
+  docId: string; projectId: string; tags: string[]; onUpdate: (tags: string[]) => void
+}) {
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState("")
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  async function removeTag(tag: string, e: React.MouseEvent) {
+    e.stopPropagation()
+    const next = tags.filter(t => t !== tag)
+    onUpdate(next)
+    await api.patch(`/api/projects/${projectId}/docs/${docId}`, { tags: next })
+  }
+
+  async function addTag() {
+    const val = draft.trim()
+    if (!val || tags.includes(val)) { setAdding(false); setDraft(""); return }
+    const next = [...tags, val]
+    onUpdate(next)
+    setAdding(false)
+    setDraft("")
+    await api.patch(`/api/projects/${projectId}/docs/${docId}`, { tags: next })
+  }
+
+  return (
+    <div className="flex gap-1 mt-1 flex-wrap items-center" onClick={e => e.stopPropagation()}>
+      {tags.map(t => (
+        <span key={t}
+          className="group/tag inline-flex items-center gap-0.5 text-[10px] bg-gray-100 px-1.5 py-0.5 rounded-full text-gray-500 hover:bg-gray-200">
+          {t}
+          <button
+            onClick={e => removeTag(t, e)}
+            className="hidden group-hover/tag:inline text-gray-400 hover:text-red-500 ml-0.5 leading-none"
+            title={`Remove "${t}"`}
+          >×</button>
+        </span>
+      ))}
+      {adding ? (
+        <input
+          ref={inputRef}
+          autoFocus
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={addTag}
+          onKeyDown={e => {
+            if (e.key === "Enter") addTag()
+            if (e.key === "Escape") { setAdding(false); setDraft("") }
+          }}
+          placeholder="tag"
+          className="rounded-full border border-black px-1.5 py-0.5 text-[10px] w-16 outline-none"
+        />
+      ) : (
+        <button
+          onClick={e => { e.stopPropagation(); setAdding(true) }}
+          className="inline-flex items-center gap-0.5 text-[10px] text-gray-400 hover:text-black rounded-full border border-dashed border-gray-300 px-1.5 py-0.5 hover:border-black"
+          title="Add tag"
+        >
+          <Plus size={9} /> tag
+        </button>
+      )}
     </div>
   )
 }
@@ -387,16 +454,19 @@ export default function DocsPage() {
                             />
                           </div>
                         </div>
-                        {(d.tags?.length > 0 || d.papers?.length > 0) && (
-                          <div className="flex gap-1 mt-1 flex-wrap">
-                            {d.tags?.map(t => (
-                              <span key={t} className="text-[10px] bg-gray-100 px-1.5 py-0.5 rounded-full text-gray-500">{t}</span>
-                            ))}
-                            {d.papers?.length > 0 && (
-                              <span className="text-[10px] text-gray-400">{d.papers.length} refs</span>
+                        <div className="flex gap-1 mt-1 flex-wrap items-center">
+                          <TagEditor
+                            docId={d.id}
+                            projectId={projectId}
+                            tags={d.tags ?? []}
+                            onUpdate={tags => setDocs(prev =>
+                              prev.map(x => x.id === d.id ? { ...x, tags } : x)
                             )}
-                          </div>
-                        )}
+                          />
+                          {d.papers?.length > 0 && (
+                            <span className="text-[10px] text-gray-400">{d.papers.length} refs</span>
+                          )}
+                        </div>
                       </li>
                     ))}
                   </ul>

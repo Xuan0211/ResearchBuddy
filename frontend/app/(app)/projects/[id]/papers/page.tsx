@@ -20,6 +20,7 @@ export default function PapersPage() {
   const [showZoteroConfig, setShowZoteroConfig] = useState(false)
   const [bibStatus, setBibStatus] = useState<{ entry_count: number; exists: boolean } | null>(null)
   const [showBibPreview, setShowBibPreview] = useState(false)
+  const [autoSyncing, setAutoSyncing] = useState(false)
 
   // Filters
   const [search, setSearch] = useState("")
@@ -29,17 +30,54 @@ export default function PapersPage() {
   const [groupBy, setGroupBy] = useState<"none" | "year" | "venue" | "tag">("none")
   const [hideNoPreview, setHideNoPreview] = useState(false)
 
+  async function refreshPapersAndBib() {
+    const [paps, bib] = await Promise.all([
+      api.get<Paper[]>(`/api/projects/${projectId}/papers`).catch(() => null),
+      api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`).catch(() => null),
+    ])
+    if (paps) setPapers(paps.filter(p => p.title))
+    if (bib) setBibStatus(bib)
+  }
+
   useEffect(() => {
     setLoading(true)
-    api.get<Paper[]>(`/api/projects/${projectId}/papers`)
-      .then(paps => setPapers(paps.filter(p => p.title)))
-      .finally(() => setLoading(false))
-    api.get<Project>(`/api/projects/${projectId}`)
-      .then(setProject)
-      .catch(() => {})
-    api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`)
-      .then(setBibStatus)
-      .catch(() => {})
+    let cancelled = false
+
+    async function loadAndSync() {
+      // 1. Load papers immediately (local cache from git)
+      const [paps, proj, bib] = await Promise.all([
+        api.get<Paper[]>(`/api/projects/${projectId}/papers`).catch(() => []),
+        api.get<Project>(`/api/projects/${projectId}`).catch(() => null),
+        api.get<{ entry_count: number; exists: boolean }>(`/api/projects/${projectId}/papers/bib/status`).catch(() => null),
+      ])
+      if (cancelled) return
+      setPapers((paps as Paper[]).filter(p => p.title))
+      if (proj) setProject(proj)
+      if (bib) setBibStatus(bib)
+      setLoading(false)
+
+      // 2. Auto-trigger Zotero sync in background if configured
+      if ((proj as Project | null)?.zotero_configured) {
+        setAutoSyncing(true)
+        try {
+          const stats = await api.post<{ created: number; updated: number; skipped: number; total: number; bib_entries?: number }>(
+            `/api/projects/${projectId}/zotero/sync`
+          )
+          if (cancelled) return
+          const bibNote = stats.bib_entries != null ? ` · bib: ${stats.bib_entries} entries` : ""
+          setSyncMsg(`Auto-synced Zotero: ${stats.created} new · ${stats.updated} updated · ${stats.skipped} skipped${bibNote}`)
+          await refreshPapersAndBib()
+        } catch {
+          // Silently ignore auto-sync failures
+        } finally {
+          if (!cancelled) setAutoSyncing(false)
+        }
+      }
+    }
+
+    loadAndSync()
+    return () => { cancelled = true }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId])
 
   // Derived filter options
@@ -221,9 +259,9 @@ export default function PapersPage() {
                 {importing ? "…" : "Import"}
               </button>
             </form>
-            <button onClick={syncZotero} disabled={syncing} title="Sync from Zotero"
+            <button onClick={syncZotero} disabled={syncing || autoSyncing} title={autoSyncing ? "Auto-syncing Zotero…" : "Sync from Zotero"}
               className="p-1.5 rounded border hover:bg-gray-50 disabled:opacity-50 relative text-gray-600">
-              <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
+              <RefreshCw size={14} className={(syncing || autoSyncing) ? "animate-spin" : ""} />
               {!project?.zotero_configured && (
                 <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-amber-400" />
               )}
@@ -296,7 +334,7 @@ export default function PapersPage() {
             </div>
           ))
         )}
-        <AIPapersPanel projectId={projectId} />
+        <AIPapersPanel projectId={projectId} onConfirmed={refreshPapersAndBib} />
       </div>
 
       {showBibPreview && (
@@ -324,7 +362,7 @@ export default function PapersPage() {
 
 interface AIEntry { key: string; title: string; author: string; year: string; writing_id: string; bib_path: string }
 
-export function AIPapersPanel({ projectId }: { projectId: string }) {
+export function AIPapersPanel({ projectId, onConfirmed }: { projectId: string; onConfirmed?: () => void }) {
   const [entries, setEntries] = useState<AIEntry[]>([])
   const [loaded, setLoaded] = useState(false)
   const [open, setOpen] = useState(false)
@@ -341,6 +379,8 @@ export function AIPapersPanel({ projectId }: { projectId: string }) {
     try {
       await api.post(`/api/projects/${projectId}/papers/ai-generated/confirm`, { writing_id: e.writing_id, key: e.key })
       setEntries(prev => prev.filter(x => x.key !== e.key))
+      // Notify parent to refresh papers list and bib status
+      onConfirmed?.()
     } catch (err: any) { alert(err.message) }
     finally { setConfirming(null) }
   }

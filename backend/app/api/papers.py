@@ -104,6 +104,8 @@ def _list_all_papers(project_id: str) -> list[dict]:
         parts = p.split("/")
         if not p.endswith(".md") or len(parts) != 3:
             continue
+        if parts[-1].lower() == "readme.md":
+            continue
         try:
             meta = _parse_paper(project_id, p)
             if not meta.get("title"):
