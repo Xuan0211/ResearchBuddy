@@ -341,9 +341,6 @@ def update_writing_file(
         if not file.exists():
             raise HTTPException(404)
         file.write_text(body.content, encoding="utf-8")
-        if path == WRITING_AI_BIB:
-            from ..services.paper_bib import rebuild_papers_bib_files
-            rebuild_papers_bib_files(Path(str(wt)))
     return {"ok": True}
 
 

@@ -133,40 +133,24 @@ def _list_all_papers(project_id: str) -> list[dict]:
     return deduped
 
 
-def _read_ai_bibs_from_writing(project_id: str) -> list[tuple[str, str]]:
-    """Return list of (writing_id, bib_text) for all writing projects with an AI bib."""
-    ai_bib_suffix = "/" + WRITING_AI_BIB
-    results = []
-    for path in list_project_dir(project_id, WRITING_BASE):
-        if not path.endswith(ai_bib_suffix):
-            continue
-        parts = path.split("/")
-        if len(parts) < 3:
-            continue
-        writing_id = parts[2]
-        try:
-            results.append((writing_id, read_project_file(project_id, path)))
-        except FileNotFoundError:
-            continue
-    return results
-
-
 @router.get("/bib/ai-pending-keys")
 def get_ai_pending_keys(
     project_id: str,
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Return BibTeX keys from all writing project AI bibs (live, bypasses mirror).
+    """Return BibTeX keys from papers/bib/ai-generated.bib (the primary AI bib).
 
     Used by the frontend to colour [[paper_id]] citations red when the
     referenced paper is still AI-generated (not yet confirmed).
     """
     check_member(project_id, current_user, session)
-    keys: list[str] = []
-    for _, bib_text in _read_ai_bibs_from_writing(project_id):
-        keys.extend(re.findall(r"@\w+\{([^,\s]+)\s*,", bib_text))
-    return {"keys": list(dict.fromkeys(keys))}
+    try:
+        content = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
+        keys = re.findall(r"@\w+\{([^,\s]+)\s*,", content)
+        return {"keys": keys}
+    except FileNotFoundError:
+        return {"keys": []}
 
 
 @router.get("/bib/status")
@@ -342,7 +326,7 @@ async def create_paper(
         body.setdefault("preview_image", "")
         body.setdefault("source", "manual")
         fm.write(paper_path, body, "\n## Notes\n\n\n## Related\n\n")
-        rebuild_papers_bib_files(Path(str(wt)), rebuild_ai=False)
+        rebuild_papers_bib_files(Path(str(wt)))
 
     paper_cache.invalidate(project_id)
     return {"id": paper_id}
@@ -354,16 +338,13 @@ def list_ai_papers(
     current_user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    """Read AI-pending citations live from writing project bibs (bypasses mirror)."""
+    """Read AI-pending citations from papers/bib/ai-generated.bib (the primary AI bib)."""
     check_member(project_id, current_user, session)
-    entries: list[dict] = []
-    seen: dict[str, dict] = {}
-    for writing_id, bib_text in _read_ai_bibs_from_writing(project_id):
-        bib_path = f"{WRITING_BASE}/{writing_id}/{WRITING_AI_BIB}"
-        for e in _parse_bibtex_entries(bib_text, writing_id, bib_path):
-            e["writing_id"] = writing_id
-            seen[e["key"]] = e
-    return list(seen.values())
+    try:
+        bib_text = read_project_file(project_id, PAPERS_AI_GENERATED_BIB)
+    except FileNotFoundError:
+        return []
+    return _parse_bibtex_with_provenance(bib_text, PAPERS_AI_GENERATED_BIB)
 
 
 class AIBibAddIn(BaseModel):
@@ -379,15 +360,29 @@ def add_ai_paper(
     session: Session = Depends(get_session),
 ):
     check_member(project_id, current_user, session, min_role="member")
-    bib_path = f"{WRITING_BASE}/{body.writing_id}/{WRITING_AI_BIB}"
     with project_worktree(project_id) as wt:
         wt.commit_message = "Add AI-generated reference"
-        path = wt / bib_path
-        if not path.exists():
-            raise HTTPException(404, f"{WRITING_AI_BIB} not found in writing project {body.writing_id}")
-        existing = path.read_text(encoding="utf-8")
-        path.write_text(existing.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
-        rebuild_papers_bib_files(Path(str(wt)))
+
+        # Primary: append to papers/bib/ai-generated.bib (never overwrite)
+        ai_bib_path = wt / PAPERS_AI_GENERATED_BIB
+        ai_bib_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_ai = ai_bib_path.read_text(encoding="utf-8") if ai_bib_path.exists() else (
+            "% papers/bib/ai-generated.bib\n"
+            "% AI-generated references pending human confirmation.\n\n"
+        )
+        # Skip if key already present
+        key_match = re.search(r"@\w+\{([^,\s]+)\s*,", body.bibtex)
+        new_key = key_match.group(1) if key_match else None
+        if not new_key or new_key not in re.findall(r"@\w+\{([^,\s]+)\s*,", existing_ai):
+            ai_bib_path.write_text(existing_ai.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
+
+        # Secondary: also append to the writing project bib for LaTeX compilation
+        if body.writing_id:
+            writing_bib_path = wt / WRITING_BASE / body.writing_id / WRITING_AI_BIB
+            if writing_bib_path.exists():
+                existing_w = writing_bib_path.read_text(encoding="utf-8")
+                if not new_key or new_key not in re.findall(r"@\w+\{([^,\s]+)\s*,", existing_w):
+                    writing_bib_path.write_text(existing_w.rstrip() + "\n\n" + body.bibtex.strip() + "\n", encoding="utf-8")
     return {"ok": True}
 
 
@@ -415,65 +410,52 @@ def confirm_ai_paper(
     with project_worktree(project_id) as wt:
         wt.commit_message = f"Confirm AI reference: {body.key}"
 
-        if body.writing_id:
-            ai_path = wt / WRITING_BASE / body.writing_id / WRITING_AI_BIB
-            ref_path = wt / WRITING_BASE / body.writing_id / WRITING_REFS_BIB
-            if not ai_path.exists():
-                raise HTTPException(404, f"ai_generated.bib not found for {body.writing_id}")
-            ai_text = ai_path.read_text(encoding="utf-8")
-            m = entry_re.search(ai_text)
-            if not m:
-                raise HTTPException(404, f"Key '{body.key}' not found in ai_generated.bib")
-            entry_text = m.group(1)
-            ai_path.write_text(entry_re.sub("", ai_text).strip() + "\n", encoding="utf-8")
-            ref_text = ref_path.read_text(encoding="utf-8") if ref_path.exists() else ""
-            ref_path.write_text(
-                ref_text.rstrip() + f"\n\n% Confirmed from AI references\n{entry_text}\n",
-                encoding="utf-8",
-            )
-        else:
-            ai_bib_path = wt / PAPERS_AI_GENERATED_BIB
-            if not ai_bib_path.exists():
-                raise HTTPException(404, "papers/bib/ai-generated.bib not found")
-            ai_text = ai_bib_path.read_text(encoding="utf-8")
-            m = entry_re.search(ai_text)
-            if not m:
-                raise HTTPException(404, f"Key '{body.key}' not found in ai-generated.bib")
+        # Primary: remove from papers/bib/ai-generated.bib
+        ai_bib_path = wt / PAPERS_AI_GENERATED_BIB
+        if not ai_bib_path.exists():
+            raise HTTPException(404, "papers/bib/ai-generated.bib not found")
+        ai_text = ai_bib_path.read_text(encoding="utf-8")
+        m = entry_re.search(ai_text)
+        if not m:
+            raise HTTPException(404, f"Key '{body.key}' not found in ai-generated.bib")
 
-            def _field(name: str, src: str) -> str:
-                fm = re.search(rf"{name}\s*=\s*[{{\"](.*?)[}}\"]", src, re.IGNORECASE | re.DOTALL)
-                return " ".join((fm.group(1) if fm else "").split())
+        def _field(name: str, src: str) -> str:
+            fm = re.search(rf"{name}\s*=\s*[{{\"](.*?)[}}\"]", src, re.IGNORECASE | re.DOTALL)
+            return " ".join((fm.group(1) if fm else "").split())
 
-            entry_text = m.group(1)
-            title = _field("title", entry_text)
-            authors_raw = _field("author", entry_text)
-            year_str = _field("year", entry_text)
-            doi = _field("doi", entry_text)
-            url = _field("url", entry_text)
-            eprint = _field("eprint", entry_text)
-            authors = [a.strip() for a in re.split(r"\band\b", authors_raw) if a.strip()]
+        entry_text = m.group(1)
+        title = _field("title", entry_text)
+        authors_raw = _field("author", entry_text)
+        year_str = _field("year", entry_text)
+        doi = _field("doi", entry_text)
+        url = _field("url", entry_text)
+        eprint = _field("eprint", entry_text)
+        authors = [a.strip() for a in re.split(r"\band\b", authors_raw) if a.strip()]
 
-            note_path = wt / PAPERS_NOTES_DIR / f"{body.key}.md"
-            if not note_path.exists():
-                from ..services import frontmatter as fm_svc
-                meta: dict = {
-                    "id": body.key,
-                    "title": title or body.key,
-                    "authors": authors,
-                    "year": int(year_str) if year_str.isdigit() else None,
-                    "doi": doi,
-                    "arxiv_id": eprint,
-                    "tags": [],
-                    "source": "ai-confirmed",
-                    "links": {
-                        "url": url,
-                        "arxiv": f"https://arxiv.org/abs/{eprint}" if eprint else "",
-                        "zotero_local": "",
-                        "zotero_web": "",
-                        "google_drive_pdf": "",
-                    },
-                }
-                fm_svc.write(note_path, meta, "")
+        ai_bib_path.write_text(entry_re.sub("", ai_text).strip() + "\n", encoding="utf-8")
+
+        # Create paper note so entry lands in references.read_only.bib
+        note_path = wt / PAPERS_NOTES_DIR / f"{body.key}.md"
+        if not note_path.exists():
+            from ..services import frontmatter as fm_svc
+            meta: dict = {
+                "id": body.key,
+                "title": title or body.key,
+                "authors": authors,
+                "year": int(year_str) if year_str.isdigit() else None,
+                "doi": doi,
+                "arxiv_id": eprint,
+                "tags": [],
+                "source": "ai-confirmed",
+                "links": {
+                    "url": url,
+                    "arxiv": f"https://arxiv.org/abs/{eprint}" if eprint else "",
+                    "zotero_local": "",
+                    "zotero_web": "",
+                    "google_drive_pdf": "",
+                },
+            }
+            fm_svc.write(note_path, meta, "")
 
         rebuild_papers_bib_files(Path(str(wt)))
         paper_cache.invalidate(project_id)
@@ -573,7 +555,7 @@ def update_paper(
         if notes is not None:
             meta, _ = fm.read(paper_path)
             fm.write(paper_path, meta, f"\n## Notes\n\n{notes}\n")
-        rebuild_papers_bib_files(Path(str(wt)), rebuild_ai=False)
+        rebuild_papers_bib_files(Path(str(wt)))
 
     paper_cache.invalidate(project_id)
     return {"ok": True}
