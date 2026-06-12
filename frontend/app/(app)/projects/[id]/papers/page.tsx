@@ -1,7 +1,7 @@
 "use client"
 import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { RefreshCw, Settings, Download, Image, BookMarked, X, RotateCcw } from "lucide-react"
+import { RefreshCw, Settings, Download, Image, BookMarked, X, RotateCcw, ChevronDown, ChevronRight } from "lucide-react"
 import { api } from "@/lib/api"
 import type { Paper, Project } from "@/lib/types"
 import ModuleResourcesPanel from "@/components/ModuleResourcesPanel"
@@ -360,15 +360,17 @@ export default function PapersPage() {
 
 // ── AI Generated Papers section ───────────────────────────────────────────────
 
-interface AIEntry { key: string; title: string; author: string; year: string; writing_id: string; bib_path: string }
+interface AIEntry {
+  key: string; title: string; author: string; year: string
+  doi: string; url: string; writing_id: string; bib_path: string
+}
 
 export function AIPapersPanel({ projectId, onConfirmed }: { projectId: string; onConfirmed?: () => void }) {
   const [entries, setEntries] = useState<AIEntry[]>([])
   const [loaded, setLoaded] = useState(false)
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(true)  // expanded by default
   const [confirming, setConfirming] = useState<string | null>(null)
 
-  // Load eagerly so count badge shows even when collapsed
   useEffect(() => {
     api.get<AIEntry[]>(`/api/projects/${projectId}/papers/ai-generated`)
       .then(e => { setEntries(e); setLoaded(true) }).catch(() => setLoaded(true))
@@ -379,64 +381,82 @@ export function AIPapersPanel({ projectId, onConfirmed }: { projectId: string; o
     try {
       await api.post(`/api/projects/${projectId}/papers/ai-generated/confirm`, { writing_id: e.writing_id, key: e.key })
       setEntries(prev => prev.filter(x => x.key !== e.key))
-      // Notify parent to refresh papers list and bib status
       onConfirmed?.()
     } catch (err: any) { alert(err.message) }
     finally { setConfirming(null) }
   }
 
+  if (loaded && entries.length === 0) return null
+
   return (
-    <div className="mb-4 space-y-3">
+    <div className="mt-6 border-t pt-5">
+      {/* Section header */}
       <button
         onClick={() => setOpen(o => !o)}
-        className="text-xs text-gray-400 hover:text-black underline underline-offset-2"
+        className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-black"
       >
-        {open ? "Hide AI-generated references" : "Show AI-generated references"}
-        <span className="ml-2 no-underline">
-          {loaded && entries.length > 0 && (
-            <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800">
-              {entries.length} pending
-            </span>
-          )}
-        </span>
+        {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        AI-generated references
+        {loaded && entries.length > 0 && (
+          <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-medium text-yellow-800">
+            {entries.length} pending confirmation
+          </span>
+        )}
       </button>
 
       {open && (
-        <div>
+        <>
           {!loaded ? (
             <p className="text-xs text-gray-400">Loading…</p>
-          ) : entries.length === 0 ? (
-            <p className="text-xs text-gray-500">
-              No pending AI-generated references.
-              AI agents write to <code className="bg-gray-100 px-1 rounded">bibs/ai_generated.bib</code> inside writing projects and ResearchBuddy mirrors them into <code className="bg-gray-100 px-1 rounded">papers/bib/ai-generated.bib</code>.
-            </p>
           ) : (
             <>
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              <div className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 2xl:columns-5 gap-3">
                 {entries.map(e => (
-                  <div key={e.key} className="rounded-lg border p-3 space-y-2 bg-white">
-                    <p className="text-xs font-semibold line-clamp-2 text-gray-900">{e.title || e.key}</p>
-                    {e.author && <p className="text-[10px] text-gray-500 truncate">{e.author}</p>}
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      {e.year && <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">{e.year}</span>}
-                      <code className="rounded bg-yellow-50 px-1.5 py-0.5 text-[10px] text-yellow-800 font-mono">@{e.key}</code>
+                  <div key={e.key} className="mb-3 break-inside-avoid rounded-lg border overflow-hidden bg-white shadow-sm">
+                    <div className="p-2.5 space-y-1.5">
+                      <p className="text-xs font-medium line-clamp-2 leading-tight text-gray-900">{e.title || e.key}</p>
+                      {e.author && (
+                        <p className="text-xs text-gray-500 truncate">
+                          {e.author.split(" and ")[0].trim()}{e.author.includes(" and ") ? " et al." : ""}
+                          {e.year ? ` · ${e.year}` : ""}
+                        </p>
+                      )}
+
+                      {/* Links */}
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {e.doi && (
+                          <a href={`https://doi.org/${e.doi}`} target="_blank" rel="noreferrer"
+                            onClick={ev => ev.stopPropagation()}
+                            className="text-[10px] bg-blue-50 text-blue-700 px-1 py-0.5 rounded font-medium">DOI</a>
+                        )}
+                        {e.url && (
+                          <a href={e.url} target="_blank" rel="noreferrer"
+                            onClick={ev => ev.stopPropagation()}
+                            className="text-[10px] bg-emerald-50 text-emerald-700 px-1 py-0.5 rounded font-medium">URL</a>
+                        )}
+                        <code className="ml-auto rounded bg-yellow-50 px-1 py-0.5 text-[10px] text-yellow-800 font-mono">
+                          \aicite{"{" + e.key + "}"}
+                        </code>
+                      </div>
+
+                      <button
+                        onClick={() => confirm(e)}
+                        disabled={confirming === e.key}
+                        className="w-full rounded bg-green-600 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+                      >
+                        {confirming === e.key ? "Confirming…" : "✓ Confirm — add to library"}
+                      </button>
                     </div>
-                    <p className="text-[10px] text-gray-400 truncate">from: {e.writing_id}</p>
-                    <button
-                      onClick={() => confirm(e)} disabled={confirming === e.key}
-                      className="w-full rounded-md bg-green-600 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
-                    >
-                      {confirming === e.key ? "…" : "✓ Confirm"}
-                    </button>
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-[10px] text-gray-400">
-                Confirming moves the entry to <code className="bg-gray-100 px-1 rounded">bibs/references.read_only.bib</code> in the writing project and refreshes the papers bib files.
+              <p className="mt-2 text-[10px] text-gray-400">
+                Source: <code className="bg-gray-100 px-1 rounded">papers/bib/ai-generated.bib</code>.
+                Confirming creates a paper note in <code className="bg-gray-100 px-1 rounded">papers/notes/</code> and moves the entry to the main bib.
               </p>
             </>
           )}
-        </div>
+        </>
       )}
     </div>
   )
