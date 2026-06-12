@@ -145,7 +145,7 @@ export default function WorkspacePage() {
   const projectSlug = (data?.project.name ?? "project").replace(/\s+/g, "-").toLowerCase()
 
   const cloneCmd = `git clone ${gitUrl} ${projectSlug}`
-  const pushCmds = `cd ${projectSlug}\ngit add .\ngit commit -m "Your message"\ngit push`
+  const pushCmds = `git add .\ngit commit -m "Your message"\ngit pull --rebase\ngit push`
 
   async function ensure() {
     setBusy("ensure")
@@ -279,8 +279,27 @@ export default function WorkspacePage() {
                 </button>
               </div>
               <code className="block rounded bg-gray-950 px-3 py-2 text-xs text-gray-100 whitespace-pre overflow-x-auto">
-                {`git add .\ngit commit -m "Your message"\ngit push`}
+                {`git add .\ngit commit -m "Your message"\ngit pull --rebase   # sync remote changes first\ngit push`}
               </code>
+            </div>
+
+            {/* one-time setup tip */}
+            <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2.5 text-xs text-blue-800 space-y-1">
+              <p className="font-medium">One-time setup (recommended)</p>
+              <p className="text-blue-700">
+                Run this once so <code className="rounded bg-blue-100 px-1">git pull</code> always rebases automatically — no need for <code className="rounded bg-blue-100 px-1">--rebase</code> every time:
+              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <code className="flex-1 rounded bg-blue-950 px-2 py-1 text-blue-100 font-mono">
+                  git config --global pull.rebase true
+                </code>
+                <button
+                  onClick={() => copy("git config --global pull.rebase true", "rebase-tip")}
+                  className="shrink-0 inline-flex items-center gap-1 text-blue-600 hover:text-blue-900"
+                >
+                  <Copy size={11} /> {copied === "rebase-tip" ? "copied" : "copy"}
+                </button>
+              </div>
             </div>
 
           </div>
