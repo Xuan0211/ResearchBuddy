@@ -4,6 +4,8 @@ title: 本地开发指南
 
 # 本地开发指南
 
+> 架构总览见 [00-architecture.md](00-architecture.md)。
+
 ## 快速启动
 
 ```bash
