@@ -142,6 +142,8 @@ def list_skills(project_id: str) -> list[dict[str, Any]]:
     for path in list_project_dir(project_id, SKILLS_ROOT):
         if not path.endswith(".md") or path.endswith(".gitkeep"):
             continue
+        if path.rsplit("/", 1)[-1].lower() == "readme.md":
+            continue
         try:
             skill = _parse_skill(project_id, path)
         except Exception:

@@ -1,10 +1,12 @@
 "use client"
 import { Suspense, useEffect, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { AlertTriangle, CheckCircle2, KeyRound, Trash2, UserRound } from "lucide-react"
+import { AlertTriangle, CheckCircle2, Copy, Eye, EyeOff, KeyRound, Plus, Trash2, UserRound } from "lucide-react"
 import { api, auth } from "@/lib/api"
 
 type Account = { id: string; name: string; email: string }
+type ApiKeyRow = { id: string; name: string; last_used: string | null }
+type NewKeyResult = { id: string; name: string; key: string }
 
 function SettingsContent() {
   const router = useRouter()
@@ -18,15 +20,24 @@ function SettingsContent() {
   const [busy, setBusy] = useState<"" | "account" | "password" | "delete">("")
   const [msg, setMsg] = useState(params.get("drive") === "connected" ? "Google Drive connected." : "")
   const [error, setError] = useState("")
+  // API Keys
+  const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([])
+  const [newKeyName, setNewKeyName] = useState("")
+  const [creatingKey, setCreatingKey] = useState(false)
+  const [newKeyResult, setNewKeyResult] = useState<NewKeyResult | null>(null)
+  const [showNewKey, setShowNewKey] = useState(false)
+  const [copiedKey, setCopiedKey] = useState(false)
 
   useEffect(() => {
     Promise.all([
       auth.me(),
       api.get<{ connected: boolean }>("/api/auth/google-drive/status").catch(() => ({ connected: false })),
-    ]).then(([me, drive]) => {
+      api.get<ApiKeyRow[]>("/api/auth/api-keys").catch(() => []),
+    ]).then(([me, drive, keys]) => {
       setAccount(me)
       setAccountForm({ name: me.name, email: me.email })
       setDriveConnected(drive.connected)
+      setApiKeys(keys)
     }).catch((err: any) => setError(err.message || "Could not load settings"))
   }, [])
 
@@ -88,6 +99,37 @@ function SettingsContent() {
     } catch (err) {
       showError(err, "Could not disconnect Google Drive")
     }
+  }
+
+  async function createApiKey(e: React.FormEvent) {
+    e.preventDefault()
+    if (!newKeyName.trim()) return
+    setCreatingKey(true)
+    try {
+      const res = await api.post<NewKeyResult>("/api/auth/api-keys", { name: newKeyName.trim() })
+      setApiKeys(prev => [...prev, { id: res.id, name: res.name, last_used: null }])
+      setNewKeyResult(res)
+      setShowNewKey(false)
+      setCopiedKey(false)
+      setNewKeyName("")
+    } catch (err) {
+      showError(err, "Could not create API key")
+    } finally {
+      setCreatingKey(false)
+    }
+  }
+
+  async function deleteApiKey(keyId: string, keyName: string) {
+    if (!confirm(`Delete API key "${keyName}"? Any scripts using it will stop working.`)) return
+    await api.delete(`/api/auth/api-keys/${keyId}`)
+    setApiKeys(prev => prev.filter(k => k.id !== keyId))
+    if (newKeyResult?.id === keyId) setNewKeyResult(null)
+  }
+
+  async function copyKey(text: string) {
+    await navigator.clipboard.writeText(text)
+    setCopiedKey(true)
+    setTimeout(() => setCopiedKey(false), 2000)
   }
 
   async function deleteAccount(e: React.FormEvent) {
@@ -193,6 +235,86 @@ function SettingsContent() {
               </button>
             )}
           </div>
+        </section>
+
+        {/* API Keys */}
+        <section className="rounded-xl border bg-white p-5 shadow-sm">
+          <div className="mb-1 flex items-center gap-2">
+            <KeyRound size={18} />
+            <h3 className="font-medium">API Keys</h3>
+          </div>
+          <p className="mb-4 text-sm text-gray-500">
+            Use an API key as a Bearer token to authenticate scripts and agents.
+            Format: <code className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-xs">Authorization: Bearer rb_…</code>
+          </p>
+
+          {/* Newly created key one-time reveal */}
+          {newKeyResult && (
+            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 p-3">
+              <p className="mb-1.5 text-xs font-semibold text-green-800">
+                Key created — copy it now. It will not be shown again.
+              </p>
+              <div className="flex items-center gap-2">
+                <code className="min-w-0 flex-1 overflow-x-auto rounded bg-white px-2 py-1.5 font-mono text-xs text-green-900 border border-green-200">
+                  {showNewKey ? newKeyResult.key : "rb_" + "•".repeat(32)}
+                </code>
+                <button type="button" onClick={() => setShowNewKey(v => !v)}
+                  className="shrink-0 rounded p-1.5 text-green-700 hover:bg-green-100"
+                  title={showNewKey ? "Hide" : "Show"}>
+                  {showNewKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+                <button type="button" onClick={() => copyKey(newKeyResult.key)}
+                  className="shrink-0 rounded p-1.5 text-green-700 hover:bg-green-100"
+                  title="Copy">
+                  <Copy size={14} />
+                </button>
+              </div>
+              {copiedKey && <p className="mt-1 text-xs text-green-700">Copied!</p>}
+              <button type="button" onClick={() => setNewKeyResult(null)}
+                className="mt-2 text-xs text-green-600 hover:underline">
+                Dismiss
+              </button>
+            </div>
+          )}
+
+          {/* Existing keys list */}
+          {apiKeys.length > 0 && (
+            <ul className="mb-4 divide-y rounded-lg border bg-gray-50">
+              {apiKeys.map(k => (
+                <li key={k.id} className="flex items-center gap-3 px-3 py-2.5">
+                  <KeyRound size={13} className="shrink-0 text-gray-400" />
+                  <span className="flex-1 text-sm font-medium truncate">{k.name}</span>
+                  {k.last_used && (
+                    <span className="shrink-0 text-xs text-gray-400">
+                      last used {new Date(k.last_used).toLocaleDateString()}
+                    </span>
+                  )}
+                  <button type="button" onClick={() => deleteApiKey(k.id, k.name)}
+                    className="shrink-0 rounded p-1 text-gray-300 hover:bg-red-50 hover:text-red-600">
+                    <Trash2 size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Create new key form */}
+          <form onSubmit={createApiKey} className="flex gap-2">
+            <input
+              value={newKeyName}
+              onChange={e => setNewKeyName(e.target.value)}
+              placeholder="Key name (e.g. laptop, CI script)"
+              maxLength={80}
+              className="flex-1 rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-black"
+            />
+            <button
+              disabled={creatingKey || !newKeyName.trim()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-black px-4 py-2 text-sm text-white disabled:opacity-50"
+            >
+              <Plus size={14} />
+              {creatingKey ? "Creating…" : "Create"}
+            </button>
+          </form>
         </section>
 
         <form onSubmit={deleteAccount} className="rounded-xl border border-red-100 bg-red-50 p-5">

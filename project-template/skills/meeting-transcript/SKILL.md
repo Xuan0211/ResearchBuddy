@@ -5,12 +5,20 @@ description: Turn a raw meeting transcript into a structured ResearchBuddy meeti
 tags:
   - built-in
   - meetings
+sections:
+  - meetings
 ---
 
 # Meeting Transcript Analysis
 
 Turn a raw meeting transcript into a structured meeting note that the
 ResearchBuddy frontend can display correctly.
+
+> **How to invoke**: Open a meeting, then ask the agent to run this skill.
+> Provide the transcript text (or a path like `meetings/resources/YYYYMMDD-....txt`)
+> and the target meeting ID.
+
+---
 
 ## Critical: File Format
 
@@ -20,104 +28,53 @@ resolve the meeting `id` and will show "Meeting not found."
 
 ### Step 1 — Choose a meeting ID
 
+Use the date as the ID:
+
 ```
-mtg_id = YYMMDD-{slug}        e.g.  260609-alignment-meeting
+mtg_id = YYYYMMDD          e.g.  20260609
 ```
 
-The filename must be `{mtg_id}.md` and the `id:` field in frontmatter must
-match exactly.
+The **filename must be `{mtg_id}.md`** and the **`id:` field in frontmatter must
+match exactly**.
 
 ### Step 2 — Write the frontmatter
 
 ```yaml
 ---
-id: "260609-alignment-meeting"   # matches filename
-date: "2026-06-09"
-title: "Alignment Meeting"
-start_time: "10:00"              # HH:MM, optional
-end_time:   "11:30"              # HH:MM, optional
+id: "20260609"             # MUST match filename without .md
+date: "2026-06-09"         # YYYY-MM-DD
+title: "Meeting Title"
+start_time: "10:00"        # HH:MM, optional
+end_time:   "11:30"        # HH:MM, optional
 location: ""
-attendees:                       # @handles from project_info/contacts.json
-  - handle1
-document_type: meeting
-links:
-  google_drive: ""
-  outlook: ""
-  outlook_calendar: ""
-  transcript: ""                 # relative path to raw transcript file if any
----
-```
-
-### Step 3 — Write the body in tabs
-
-Tabs are **NOT** YAML. They are HTML comment markers in the Markdown body:
-
-```
-<!-- rb:tab id="pre-meeting" title="Pre-meeting" -->
-
-(agenda / last week / this week content here)
-
-<!-- rb:tab id="transcript-notes" title="Transcript / Notes" -->
-
-(meeting discussion notes here)
-
-<!-- rb:tab id="post-meeting" title="Post-meeting" -->
-
-(conclusions and TODO here)
-```
-
-> ⚠️ Common mistake: do NOT put `tabs:` in the YAML frontmatter.
-> Tabs in frontmatter are silently ignored by the backend.
-
-### Step 4 — Add TODO items to Post-meeting tab
-
-Format action items as a markdown checklist inside the post-meeting tab:
-
-```markdown
-## TODO
-
-- [ ] Description of task @handle
-- [ ] Another task @handle
-```
-
-After creating the file, also add the same items to
-`.researchbuddy/todos.json` (see format below) so they appear in the
-frontend TODO board.
-
----
-
-## Complete Example
-
-```markdown
----
-id: "260609-alignment-meeting"
-date: "2026-06-09"
-title: "Alignment Meeting"
-start_time: "10:00"
-end_time: "11:30"
-location: "Tencent Meeting"
-attendees:
+attendees:                 # @handles from project_info/contacts.json
   - yuan.xu
 document_type: meeting
 links:
   google_drive: ""
   outlook: ""
   outlook_calendar: ""
-  transcript: ""
+  transcript: ""           # relative path to raw transcript if any
 ---
+```
 
+### Step 3 — Write the body in tabs
+
+Tabs are **HTML comment markers in the body** — NOT YAML fields:
+
+```
 <!-- rb:tab id="pre-meeting" title="Pre-meeting" -->
 
 ## Agenda
 
-1. Research overview
-2. Platform integration discussion
+1. Topic 1
+2. Topic 2
 
 <!-- rb:tab id="transcript-notes" title="Transcript / Notes" -->
 
-## Discussion
+## Notes
 
-Key points from the meeting...
+Key discussion points...
 
 <!-- rb:tab id="post-meeting" title="Post-meeting" -->
 
@@ -127,9 +84,16 @@ Key points from the meeting...
 
 ## TODO
 
-- [ ] Draft component spec v0.1 @yuan.xu
-- [ ] Schedule follow-up meeting
+- [ ] Task description @handle
 ```
+
+> ⚠️ Do NOT put `tabs:` in the YAML frontmatter — it is silently ignored.
+
+### Step 4 — Update todo files
+
+After writing the meeting note, update both:
+1. `project_info/TODO.md` — markdown checklist of new action items
+2. `.researchbuddy/todos.json` — machine-readable board (see format below)
 
 ---
 
@@ -145,9 +109,9 @@ Add a list entry under `"lists"`:
   "lists": [
     {
       "id": "unique10hex",
-      "title": "Meeting YYMMDD Action Items",
+      "title": "Meeting YYYYMMDD Action Items",
       "week_start": "YYYY-MM-DD",
-      "meeting_id": "260609-alignment-meeting",
+      "meeting_id": "20260609",
       "doc_ids": [],
       "due_at": "",
       "order": 0,
@@ -171,8 +135,7 @@ Add a list entry under `"lists"`:
 
 Rules for `todos.json`:
 - `week_start` must be the **Monday** of the current week (ISO date).
-  Only items whose `week_start` matches the current week appear on the board.
-- `id` fields: 10-character hex strings (e.g. `uuid.uuid4().hex[:10]`).
+- `id` fields: 10-character hex strings (`uuid.uuid4().hex[:10]`).
 - `meeting_id` links the list back to the meeting file.
 
 ---
@@ -180,9 +143,10 @@ Rules for `todos.json`:
 ## Checklist Before Committing
 
 - [ ] File is at `meetings/mygdocs/{mtg_id}.md`
-- [ ] `id:` in frontmatter matches the filename (without `.md`)
-- [ ] `date:` is present and in `YYYY-MM-DD` format
-- [ ] `title:` is present
-- [ ] Tabs use `<!-- rb:tab id="..." title="..." -->` markers in the body
-- [ ] `todos.json` updated with matching `meeting_id`
-- [ ] `project_info/TODO.md` updated with new action items
+- [ ] `id:` in frontmatter exactly matches filename without `.md`
+- [ ] `date:` present in `YYYY-MM-DD` format
+- [ ] `title:` present
+- [ ] `document_type: meeting` present
+- [ ] Tabs use `<!-- rb:tab id="..." title="..." -->` in the body (not frontmatter)
+- [ ] `todos.json` updated with matching `meeting_id` and correct `week_start`
+- [ ] `project_info/TODO.md` updated with same action items
