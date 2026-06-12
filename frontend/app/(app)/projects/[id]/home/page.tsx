@@ -312,6 +312,10 @@ export default function HomePage() {
   const [dragItem, setDragItem] = useState<{ listId: string; itemId: string } | null>(null)
   const [itemForms, setItemForms] = useState<Record<string, TodoItemForm>>({})
   const [newItemDueForms, setNewItemDueForms] = useState<Record<string, string>>({})
+  const [editingTodoListId, setEditingTodoListId] = useState<string | null>(null)
+  const [todoListTitleDraft, setTodoListTitleDraft] = useState("")
+  const [editingTodoItem, setEditingTodoItem] = useState<{ listId: string; itemId: string } | null>(null)
+  const [todoItemTextDraft, setTodoItemTextDraft] = useState("")
   const [peoplePickerListId, setPeoplePickerListId] = useState<string | null>(null)
   const [docPickerListId, setDocPickerListId] = useState<string | null>(null)
   const [todoDocQuery, setTodoDocQuery] = useState("")
@@ -324,6 +328,7 @@ export default function HomePage() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<ResizeDrag | null>(null)
   const initializedTimelineRef = useRef(false)
+  const skipTodoEditBlurRef = useRef(false)
 
   // ── Load ──────────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -556,6 +561,27 @@ export default function HomePage() {
     setTodoLists(prev => prev.map(list => list.id === listId ? updated : list))
   }
 
+  function openTodoListTitleEditor(list: TodoList) {
+    if (!canEdit) return
+    setEditingTodoItem(null)
+    setEditingTodoListId(list.id)
+    setTodoListTitleDraft(list.title)
+  }
+
+  function cancelTodoListTitleEditor() {
+    skipTodoEditBlurRef.current = true
+    setEditingTodoListId(null)
+    setTodoListTitleDraft("")
+  }
+
+  async function saveTodoListTitle(listId: string) {
+    if (editingTodoListId !== listId) return
+    const title = todoListTitleDraft.trim() || "Untitled TODO"
+    setEditingTodoListId(null)
+    setTodoListTitleDraft("")
+    await patchTodoList(listId, { title })
+  }
+
   function toggleTodoPerson(listId: string, value: string) {
     const form = itemForms[listId] ?? blankItemForm
     const next = form.mentions.includes(value) ? form.mentions.filter(v => v !== value) : [...form.mentions, value]
@@ -576,6 +602,36 @@ export default function HomePage() {
     setTodoLists(prev => prev.map(list => list.id === listId
       ? { ...list, items: list.items.map(item => item.id === itemId ? updated : item), is_mine: list.items.some(item => item.id === itemId ? updated.is_mine : item.is_mine) }
       : list))
+  }
+
+  function openTodoItemTextEditor(listId: string, item: TodoItem) {
+    if (!canEdit) return
+    setEditingTodoListId(null)
+    setEditingTodoItem({ listId, itemId: item.id })
+    setTodoItemTextDraft(item.text)
+  }
+
+  function cancelTodoItemTextEditor() {
+    skipTodoEditBlurRef.current = true
+    setEditingTodoItem(null)
+    setTodoItemTextDraft("")
+  }
+
+  async function saveTodoItemText(listId: string, item: TodoItem) {
+    if (editingTodoItem?.listId !== listId || editingTodoItem.itemId !== item.id) return
+    const text = todoItemTextDraft.trim() || "Untitled TODO"
+    const textMentions = (text.match(/@([\w.-]+)/g) || []).map(m => m.slice(1))
+    const textDocIds = (text.match(/\{\{([^{}]+)\}\}/g) || [])
+      .map(m => m.slice(2, -2))
+      .map(title => [...docById.values()].find(d => d.title === title)?.id)
+      .filter(Boolean) as string[]
+    setEditingTodoItem(null)
+    setTodoItemTextDraft("")
+    await patchTodoItem(listId, item.id, {
+      text,
+      mentions: [...new Set([...item.mentions, ...textMentions])],
+      doc_ids: [...new Set([...item.doc_ids, ...textDocIds])],
+    })
   }
 
   async function deleteTodoItem(listId: string, itemId: string) {
@@ -1044,7 +1100,32 @@ export default function HomePage() {
                     {/* Card header */}
                     <div className="flex items-start justify-between gap-2 border-b px-4 py-2.5">
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-gray-900">{list.title}</p>
+                        {editingTodoListId === list.id ? (
+                          <input
+                            autoFocus
+                            value={todoListTitleDraft}
+                            onChange={e => setTodoListTitleDraft(e.target.value)}
+                            onBlur={() => {
+                              if (skipTodoEditBlurRef.current) { skipTodoEditBlurRef.current = false; return }
+                              void saveTodoListTitle(list.id)
+                            }}
+                            onKeyDown={e => {
+                              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
+                              if (e.key === "Escape") { e.preventDefault(); cancelTodoListTitleEditor() }
+                            }}
+                            className="w-full rounded border px-1.5 py-0.5 text-sm font-semibold text-gray-900 outline-none focus:ring-1 focus:ring-black"
+                          />
+                        ) : canEdit ? (
+                          <button
+                            type="button"
+                            onClick={() => openTodoListTitleEditor(list)}
+                            className="block max-w-full truncate rounded px-1 py-0.5 text-left text-sm font-semibold text-gray-900 hover:bg-gray-50"
+                          >
+                            {list.title}
+                          </button>
+                        ) : (
+                          <p className="truncate text-sm font-semibold text-gray-900">{list.title}</p>
+                        )}
                         <div className="mt-1 flex flex-wrap gap-1">
                           {boundMeeting && <button onClick={() => router.push(`/projects/${projectId}/meetings/${boundMeeting.id}`)} className="rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] text-blue-700">{boundMeeting.title}</button>}
                           {list.due_at && <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700">{daysUntil(list.due_at)}</span>}
@@ -1069,16 +1150,48 @@ export default function HomePage() {
                         const embeddedTitles = new Set((item.text.match(/\{\{([^{}]+)\}\}/g) || []).map(m => m.slice(2, -2)))
                         const extraMentions = item.mentions.filter(m => !embeddedMentions.has(m.replace(/^@/, "").toLowerCase()))
                         const extraDocs = item.doc_ids.filter(id => { const d = docById.get(id); return d && !embeddedTitles.has(d.title) })
+                        const isEditingItemText = editingTodoItem?.listId === list.id && editingTodoItem.itemId === item.id
                         return (
-                          <div key={item.id} draggable={canEdit} onDragStart={() => setDragItem({ listId: list.id, itemId: item.id })} onDragOver={e => e.preventDefault()} onDrop={() => reorderTodoItem(list.id, item.id)}
+                          <div key={item.id} draggable={canEdit && !isEditingItemText} onDragStart={() => setDragItem({ listId: list.id, itemId: item.id })} onDragOver={e => e.preventDefault()} onDrop={() => reorderTodoItem(list.id, item.id)}
                             className={`group flex items-start gap-2 px-4 py-2.5 ${item.is_mine ? "bg-red-50" : ""}`}>
                             <button onClick={() => patchTodoItem(list.id, item.id, { completed: !item.completed })} className="mt-0.5 shrink-0 text-gray-400 hover:text-black">
                               {item.completed ? <CheckSquare size={14}/> : <Square size={14}/>}
                             </button>
                             <div className="min-w-0 flex-1">
-                              <div className={`text-sm leading-snug ${item.completed ? "line-through text-gray-400" : "text-gray-800"}`}>
-                                {renderItemText(item.text)}
-                              </div>
+                              {isEditingItemText ? (
+                                <input
+                                  autoFocus
+                                  value={todoItemTextDraft}
+                                  onChange={e => setTodoItemTextDraft(e.target.value)}
+                                  onBlur={() => {
+                                    if (skipTodoEditBlurRef.current) { skipTodoEditBlurRef.current = false; return }
+                                    void saveTodoItemText(list.id, item)
+                                  }}
+                                  onKeyDown={e => {
+                                    if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur() }
+                                    if (e.key === "Escape") { e.preventDefault(); cancelTodoItemTextEditor() }
+                                  }}
+                                  className="w-full rounded border px-1.5 py-0.5 text-sm text-gray-800 outline-none focus:ring-1 focus:ring-black"
+                                />
+                              ) : (
+                                <div
+                                  role={canEdit ? "button" : undefined}
+                                  tabIndex={canEdit ? 0 : undefined}
+                                  onClick={e => {
+                                    const target = e.target as HTMLElement
+                                    if (target.closest("button,a,input,select,textarea")) return
+                                    openTodoItemTextEditor(list.id, item)
+                                  }}
+                                  onKeyDown={e => {
+                                    if (!canEdit || (e.key !== "Enter" && e.key !== " ")) return
+                                    e.preventDefault()
+                                    openTodoItemTextEditor(list.id, item)
+                                  }}
+                                  className={`rounded px-1 py-0.5 text-sm leading-snug ${canEdit ? "cursor-text hover:bg-gray-50" : ""} ${item.completed ? "line-through text-gray-400" : "text-gray-800"}`}
+                                >
+                                  {renderItemText(item.text)}
+                                </div>
+                              )}
                               {(extraMentions.length > 0 || extraDocs.length > 0) && (
                                 <div className="mt-1 flex flex-wrap gap-1">
                                   {extraMentions.map(m => <span key={m} className="rounded-full bg-gray-100 px-1.5 py-0 text-[10px] text-gray-600">@{m}</span>)}
