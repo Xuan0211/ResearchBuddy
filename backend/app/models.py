@@ -110,3 +110,17 @@ class FeedbackVote(SQLModel, table=True):
     post_id: UUID = Field(foreign_key="feedbackpost.id", index=True)
     user_id: UUID = Field(foreign_key="user.id", index=True)
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class RoadmapItem(SQLModel, table=True):
+    """Dev team roadmap item — visible on the Feedback page."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    type: str = "feature"     # "bug" | "feature"
+    priority: str = "P1"      # "P0" | "P1" | "P2"
+    status: str = "todo"      # "todo" | "in-progress" | "scheduled" | "rejected" | "long-term" | "done"
+    title: str
+    description: str = ""
+    order: int = 0            # display order within the same status group
+    created_by: UUID = Field(foreign_key="user.id")
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)

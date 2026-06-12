@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { ArrowUp, MessageSquarePlus, Send } from "lucide-react"
 import { api } from "@/lib/api"
 import type { FeedbackPost } from "@/lib/types"
+import RoadmapBoard from "@/components/RoadmapBoard"
 
 function formatWhen(value: string) {
   const d = new Date(value)
@@ -62,6 +63,8 @@ export default function FeedbackPage() {
           <h1 className="text-xl font-semibold">Feedback</h1>
           <p className="text-sm text-gray-500">Requests with more votes rise to the top.</p>
         </div>
+
+        <RoadmapBoard />
 
         <form onSubmit={submitFeedback} className="rounded-lg border bg-white p-4 shadow-sm">
           <div className="mb-3 flex items-center gap-2 text-sm font-medium">

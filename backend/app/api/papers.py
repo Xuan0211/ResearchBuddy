@@ -37,7 +37,15 @@ def _parse_paper(project_id: str, rel_path: str) -> dict:
     import frontmatter as _fm
     content = read_project_file(project_id, rel_path)
     post = _fm.loads(content)
-    return {**dict(post.metadata), "_body": post.content, "_path": rel_path}
+    meta = dict(post.metadata)
+    # Derive id and title from filename when missing so the paper stays visible
+    stem = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
+    if not meta.get("id"):
+        meta["id"] = stem
+    if not meta.get("title"):
+        meta["title"] = stem
+        meta["_missing_title"] = True
+    return {**meta, "_body": post.content, "_path": rel_path}
 
 
 def _generate_bibtex(meta: dict) -> str:
@@ -99,7 +107,7 @@ def _list_all_papers(project_id: str) -> list[dict]:
         try:
             meta = _parse_paper(project_id, p)
             if not meta.get("title"):
-                continue
+                continue  # unreachable: _parse_paper always sets a fallback title
             papers.append(_paper_public(meta))
         except Exception:
             continue

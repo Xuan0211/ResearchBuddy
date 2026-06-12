@@ -81,6 +81,22 @@ export interface FeedbackPost {
   notification_sent?: boolean
 }
 
+export type RoadmapItemType = "bug" | "feature"
+export type RoadmapItemPriority = "P0" | "P1" | "P2"
+export type RoadmapItemStatus = "todo" | "in-progress" | "scheduled" | "rejected" | "long-term" | "done"
+
+export interface RoadmapItem {
+  id: string
+  type: RoadmapItemType
+  priority: RoadmapItemPriority
+  status: RoadmapItemStatus
+  title: string
+  description: string
+  order: number
+  created_at: string
+  updated_at: string
+}
+
 export interface Document {
   id: string
   title: string

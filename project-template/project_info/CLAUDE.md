@@ -31,11 +31,30 @@ See `project_info/contacts.json` for `@handle` definitions.
 
 ## Important Rules for Agents
 
-1. **Meeting files**: Always include YAML frontmatter. See `meetings/mygdocs/README.md` for the exact format. Mistakes here break the frontend.
-2. **TODO updates**: Update BOTH `project_info/TODO.md` (Markdown) AND `.researchbuddy/todos.json` (JSON) together.
-3. **Gantt updates**: Update BOTH `project_info/GANTT.md` AND `.researchbuddy/gantt.json` together.
-4. **Do not edit** any `*.read_only.*` file — they are system-managed.
-5. **Commit message**: Use a descriptive message. The server reads the bare repo HEAD directly; changes are live immediately after push.
+### Every Markdown file MUST start with YAML frontmatter
+
+A file without `---` frontmatter will appear "Untitled" or fail to open in the UI.
+If you are generating any `.md` file in this workspace, the very first line must be `---`.
+
+### Meeting files (`meetings/mygdocs/*.md`)
+1. **Required fields:** `id`, `date`, `title`, `document_type: meeting`. See `meetings/mygdocs/README.md`.
+2. `id:` **must match the filename exactly** (without `.md`).
+3. Tabs go in the **body** using `<!-- rb:tab id="..." title="..." -->` markers — NOT in frontmatter.
+
+### Document files (`document/docs/*.md`)
+4. **Required fields:** `id`, `title`, `document_type: doc`. See `document/docs/README.md`.
+5. `id:` **must match the filename exactly** (without `.md`).
+6. Tabs go in the body — same rule as meetings. No `tabs:` in frontmatter.
+
+### Paper notes (`papers/notes/*.md`)
+7. **Required fields:** `id`, `title`. See `papers/notes/README.md`.
+8. A paper note without `title:` is **silently dropped** from the papers list in the UI.
+
+### Other rules
+9. **TODO updates**: Update BOTH `project_info/TODO.md` AND `.researchbuddy/todos.json` together.
+10. **Gantt updates**: Update BOTH `project_info/GANTT.md` AND `.researchbuddy/gantt.json` together.
+11. **Do not edit** any `*.read_only.*` file — they are system-managed.
+12. **Commit message**: Use a descriptive message. The server reads the bare repo HEAD directly; changes are live immediately after push.
 
 ## Active TODOs
 

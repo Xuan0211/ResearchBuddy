@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .core.config import settings
 from .core.db import init_db
-from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync, todos, global_skills, feedback
+from .api import auth, projects, papers, meetings, documents, workspace, git, codebooks, media, skills, section_resources, writing, gantt, sync, todos, global_skills, feedback, roadmap
 import pathlib
 
 scheduler = AsyncIOScheduler()
@@ -76,6 +76,7 @@ app.include_router(media.router, prefix="/api")
 app.include_router(skills.router, prefix="/api")
 app.include_router(global_skills.router, prefix="/api")
 app.include_router(feedback.router, prefix="/api")
+app.include_router(roadmap.router, prefix="/api")
 app.include_router(section_resources.router, prefix="/api")
 app.include_router(writing.router, prefix="/api")
 app.include_router(gantt.router, prefix="/api")

@@ -44,6 +44,14 @@ def _parse_doc(project_id: str, rel_path: str) -> dict:
     content = read_project_file(project_id, rel_path)
     post = _fm.loads(content)
     meta = dict(post.metadata)
+    # Derive id and title from filename when missing so the doc stays visible
+    stem = rel_path.rsplit("/", 1)[-1].removesuffix(".md")
+    if not meta.get("id"):
+        meta["id"] = stem
+        meta["_missing_id"] = True
+    if not meta.get("title"):
+        meta["title"] = stem
+        meta["_missing_title"] = True
     return {
         **meta,
         "_body": post.content,
